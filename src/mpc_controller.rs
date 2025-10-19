@@ -33,8 +33,9 @@ pub struct MPCProblem<const STATE_SIZE: usize, const INPUT_SIZE: usize> {
 
     // MPC controller must have at least one of the below cost functions
     // optional state/input cost function, J(x, u) -> f64
-    pub(crate) state_cost:
-        Option<Box<dyn Fn(&[f64; STATE_SIZE], &ArrayView1<f64>) -> f64 + Send + Sync>>,
+    pub(crate) state_cost: Option<
+        Box<dyn Fn(&[f64; STATE_SIZE], &[f64; STATE_SIZE], &ArrayView1<f64>) -> f64 + Send + Sync>,
+    >,
 
     // optional terminal cost function, J(x, x_setpoint) -> f64
     pub(crate) terminal_cost:
@@ -117,7 +118,7 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCProblem<STATE_SIZE, IN
             trajectory.iter().zip(input_chunks.rows()).fold(
                 0.,
                 |accumulated_cost, (state, input)| {
-                    accumulated_cost + state_cost_function(state, &input)
+                    accumulated_cost + state_cost_function(state, &self.setpoint, &input)
                 },
             )
         } else {

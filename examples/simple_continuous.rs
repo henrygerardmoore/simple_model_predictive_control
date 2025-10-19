@@ -42,9 +42,18 @@ fn distance_cost(state: &[f64; STATE_SIZE], setpoint: &[f64; STATE_SIZE]) -> f64
     })
 }
 
-fn state_cost(state: &[f64; STATE_SIZE], command: &ArrayView1<f64>) -> f64 {
+fn state_cost(
+    state: &[f64; STATE_SIZE],
+    setpoint: &[f64; STATE_SIZE],
+    command: &ArrayView1<f64>,
+) -> f64 {
+    let mut zero_vel_state = state.clone();
+    zero_vel_state[1] = 0.;
+    zero_vel_state[3] = 0.;
     // penalize high thrust and y velocity to encourage a curved trajectory
-    0.01 * command.dot(command) + 0.1 * (state[3] - 0.1).max(0.).exp()
+    0.01 * command.dot(command)
+        + 0.1 * (state[3] - 0.1).max(0.).exp()
+        + 0.01 * distance_cost(&zero_vel_state, setpoint)
 }
 
 fn get_mpc_problem(
@@ -110,7 +119,10 @@ fn plot(trajectory: Array1<[f64; STATE_SIZE]>) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
-const OUT_FILE_NAME: &str = "simple_continuous.gif";
+#[cfg(debug_assertions)]
+const OUT_FILE_NAME: &str = "simple_continuous_debug.gif";
+#[cfg(not(debug_assertions))]
+const OUT_FILE_NAME: &str = "simple_continuous_release.gif";
 // see plotters animation example for reference:
 // https://github.com/plotters-rs/plotters/blob/master/plotters/examples/animation.rs
 pub fn main() {
@@ -127,8 +139,15 @@ pub fn main() {
         let solver = NelderMead::new(mpc_problem.parameter_vector());
 
         // Run solver
+        // plotting is actually the slowest part when in debug mode, but solving is also much slower of course
+        #[cfg(debug_assertions)]
         let res = Executor::new(mpc_problem, solver)
             .configure(|state| state.max_iters(1000))
+            .run()
+            .unwrap();
+        #[cfg(not(debug_assertions))]
+        let res = Executor::new(mpc_problem, solver)
+            .configure(|state| state.max_iters(100000))
             .run()
             .unwrap();
 

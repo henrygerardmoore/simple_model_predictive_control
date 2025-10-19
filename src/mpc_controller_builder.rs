@@ -13,7 +13,9 @@ pub struct MPCControllerBuilder<const STATE_SIZE: usize, const INPUT_SIZE: usize
     sample_period: Option<Duration>,
     lookahead_duration: Option<Duration>,
     dynamics_function: Option<DynamicsFunction<STATE_SIZE, INPUT_SIZE>>,
-    state_cost: Option<Box<dyn Fn(&[f64; STATE_SIZE], &ArrayView1<f64>) -> f64 + Send + Sync>>,
+    state_cost: Option<
+        Box<dyn Fn(&[f64; STATE_SIZE], &[f64; STATE_SIZE], &ArrayView1<f64>) -> f64 + Send + Sync>,
+    >,
     terminal_cost: Option<Box<dyn Fn(&[f64; STATE_SIZE], &[f64; STATE_SIZE]) -> f64 + Send + Sync>>,
     constraints: Vec<Box<dyn Fn(&[f64; STATE_SIZE]) -> f64 + Send + Sync>>,
     // input_bounds: Option<[(f64, f64); INPUT_SIZE]>,
@@ -66,7 +68,10 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize>
 
     pub fn state_cost<F>(mut self, state_cost: F) -> Self
     where
-        F: Fn(&[f64; STATE_SIZE], &ArrayView1<f64>) -> f64 + Send + Sync + 'static,
+        F: Fn(&[f64; STATE_SIZE], &[f64; STATE_SIZE], &ArrayView1<f64>) -> f64
+            + Send
+            + Sync
+            + 'static,
     {
         self.state_cost = Some(Box::new(state_cost));
         self

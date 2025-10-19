@@ -41,7 +41,11 @@ mod simple_continuous_mpc {
         })
     }
 
-    fn state_cost(_state: &[f64; STATE_SIZE], command: &ArrayView1<f64>) -> f64 {
+    fn state_cost(
+        _state: &[f64; STATE_SIZE],
+        _setpoint: &[f64; STATE_SIZE],
+        command: &ArrayView1<f64>,
+    ) -> f64 {
         // penalize high thrust
         0.00001 * command.dot(command)
     }
