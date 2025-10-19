@@ -5,7 +5,7 @@ use std::{
 
 use argmin::{
     core::Executor,
-    solver::{linesearch::MoreThuenteLineSearch, quasinewton::LBFGS},
+    solver::{linesearch::MoreThuenteLineSearch, particleswarm::ParticleSwarm, quasinewton::LBFGS},
 };
 use ndarray::{Array1, Array2, ArrayView1, array, s};
 
@@ -23,7 +23,7 @@ const INPUT_SIZE: usize = 1;
 const DT: f64 = 0.05; // (s)
 
 // lookahead time (s)
-const LOOKAHEAD: f64 = 5.0;
+const LOOKAHEAD: f64 = 2.0;
 
 // start pointing straight down
 const INITIAL_STATE: [f64; 4] = [-PI / 2., 0., 0., 0.];
@@ -298,14 +298,23 @@ pub fn main() {
     let num_chunks = (target_time / LOOKAHEAD).ceil() as usize;
     let n = (LOOKAHEAD / DT).ceil() as usize;
     let n_half = (LOOKAHEAD / 2. / DT).ceil() as usize;
-    let mut init_param = Array1::zeros(n * INPUT_SIZE);
-    for v in init_param.iter_mut() {
-        *v += rand::random::<f64>() * 0.01; // small random torque
-    }
 
     let linesearch = MoreThuenteLineSearch::new().with_c(1e-4, 0.9).unwrap();
+    let min = Array1::ones(n * INPUT_SIZE) * -INPUT_MAX;
+    let max = Array1::ones(n * INPUT_SIZE) * INPUT_MAX;
 
     for index in 0..num_chunks {
+        let mpc_problem = get_mpc_problem(state, GOAL);
+
+        let pso_warmstart_solver = ParticleSwarm::new((min.clone(), max.clone()), 100);
+        let res = Executor::new(mpc_problem, pso_warmstart_solver)
+            .configure(|state| state.max_iters(100))
+            .run()
+            .unwrap();
+
+        // now use the best particle as a warmstart
+        let best_result = res.state.best_individual.unwrap().position;
+
         let mpc_problem = get_mpc_problem(state, GOAL);
 
         let solver = LBFGS::new(linesearch.clone(), 7);
@@ -313,12 +322,12 @@ pub fn main() {
         // plotting is actually the slowest part when in debug mode, but solving is also much slower of course
         #[cfg(debug_assertions)]
         let res = Executor::new(mpc_problem, solver)
-            .configure(|state| state.param(init_param.clone()).max_iters(1000))
+            .configure(|state| state.param(best_result).max_iters(1000))
             .run()
             .unwrap();
         #[cfg(not(debug_assertions))]
         let res = Executor::new(mpc_problem, solver)
-            .configure(|state| state.param(init_param.clone()).max_iters(10000))
+            .configure(|state| state.param(best_result).max_iters(10000))
             .run()
             .unwrap();
 
