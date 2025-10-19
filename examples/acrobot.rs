@@ -5,7 +5,7 @@ use std::{
 
 use argmin::{
     core::Executor,
-    solver::{linesearch::MoreThuenteLineSearch, particleswarm::ParticleSwarm, quasinewton::LBFGS},
+    solver::{particleswarm::ParticleSwarm, simulatedannealing::SimulatedAnnealing},
 };
 use ndarray::{Array1, Array2, ArrayView1, array, s};
 
@@ -31,7 +31,7 @@ const INITIAL_STATE: [f64; 4] = [-PI / 2., 0., 0., 0.];
 const GOAL: [f64; 4] = [PI / 2., 0., 0., 0.];
 
 // acrobot parameters
-const INPUT_MAX: f64 = 100.; // N*m
+const INPUT_MAX: f64 = 20.; // N*m
 const GRAVITY: f64 = -9.80665; // m/s^2
 const L1: f64 = 2.0; // m
 // length to center of 1
@@ -299,14 +299,13 @@ pub fn main() {
     let n = (LOOKAHEAD / DT).ceil() as usize;
     let n_half = (LOOKAHEAD / 2. / DT).ceil() as usize;
 
-    let linesearch = MoreThuenteLineSearch::new().with_c(1e-4, 0.9).unwrap();
     let min = Array1::ones(n * INPUT_SIZE) * -INPUT_MAX;
     let max = Array1::ones(n * INPUT_SIZE) * INPUT_MAX;
 
     for index in 0..num_chunks {
         let mpc_problem = get_mpc_problem(state, GOAL);
 
-        let pso_warmstart_solver = ParticleSwarm::new((min.clone(), max.clone()), 100);
+        let pso_warmstart_solver = ParticleSwarm::new((min.clone(), max.clone()), 1000);
         let res = Executor::new(mpc_problem, pso_warmstart_solver)
             .configure(|state| state.max_iters(100))
             .run()
@@ -317,7 +316,7 @@ pub fn main() {
 
         let mpc_problem = get_mpc_problem(state, GOAL);
 
-        let solver = LBFGS::new(linesearch.clone(), 7);
+        let solver = SimulatedAnnealing::new(30.).unwrap();
         // Run solver
         // plotting is actually the slowest part when in debug mode, but solving is also much slower of course
         #[cfg(debug_assertions)]
