@@ -28,7 +28,7 @@ const INITIAL_STATE: [f64; 4] = [-PI / 2., 0., 0., 0.];
 const GOAL: [f64; 4] = [PI / 2., 0., 0., 0.];
 
 // acrobot parameters
-const INPUT_MAX: f64 = 50.; // N*m
+const INPUT_MAX: f64 = 100.; // N*m
 const GRAVITY: f64 = -9.80665; // m/s^2
 const L1: f64 = 2.0; // m
 // length to center of 1
@@ -98,7 +98,7 @@ fn state_derivative(state: &[f64; STATE_SIZE], input: &ArrayView1<f64>) -> [f64;
 
     let second_derivative = m.solve_into(rhs.column(0).to_owned()).unwrap();
 
-    let friction_coeff = 0.5;
+    let friction_coeff = 0.1;
 
     [
         state[2],
@@ -159,35 +159,6 @@ fn dynamics_function(
     state
 }
 
-fn terminal_cost(state: &[f64; STATE_SIZE], _setpoint: &[f64; STATE_SIZE]) -> f64 {
-    let theta1 = state[0];
-    let theta2 = state[1];
-    let omega1 = state[2];
-    let omega2 = state[3];
-    let g = -GRAVITY;
-    // purely potential energy
-    let target_energy = LC1 * M1 * g + (L1 + LC2) * M2 * g;
-
-    let yc1 = LC1 * theta1.sin();
-    let yc2 = L1 * theta1.sin() + LC2 * (theta1 + theta2).sin();
-
-    let potential_energy =
-    // potential
-    yc1 * M1 * g + yc2 * M2 * g;
-
-    let kinetic_energy =
-    // kinetic for link 1
-    0.5 * I1 * omega1.powi(2)
-    // kinetic for link 2
-    + 0.5 * (M2 * L1.powi(2) + I2 + 2. * M2 * L1 * LC2 * theta2.cos()) * omega1.powi(2)
-    + 0.5 * I2 * omega2.powi(2) + (I2 + M2 * L1 * LC2 * theta2.cos()) * omega1 * omega2;
-
-    // let angle_tolerance = 0.1;
-
-    // penalize energy deviating from target
-    (potential_energy - target_energy).abs() + kinetic_energy
-}
-
 fn state_cost(
     state: &[f64; STATE_SIZE],
     _setpoint: &[f64; STATE_SIZE],
@@ -215,10 +186,10 @@ fn state_cost(
     + 0.5 * (M2 * L1.powi(2) + I2 + 2. * M2 * L1 * LC2 * theta2.cos()) * omega1.powi(2)
     + 0.5 * I2 * omega2.powi(2) + (I2 + M2 * L1 * LC2 * theta2.cos()) * omega1 * omega2;
 
-    // let angle_tolerance = 0.1;
+    let pe_diff = (potential_energy - target_energy).abs();
 
-    // penalize energy deviating from target
-    (potential_energy - target_energy).abs() + 0.025 * kinetic_energy
+    // punish excess kinetic energy and not being at target PE
+    (kinetic_energy - pe_diff).max(0.) + pe_diff
 }
 
 fn get_mpc_problem(
@@ -228,7 +199,6 @@ fn get_mpc_problem(
     MPCProblemBuilder::<STATE_SIZE, INPUT_SIZE>::new()
         .dynamics_function(DynamicsFunction::Discrete(Box::new(&dynamics_function)))
         .state_cost(&state_cost)
-        .terminal_cost(&terminal_cost)
         .lookahead_duration(Duration::from_secs_f64(LOOKAHEAD))
         .sample_period(Duration::from_secs_f64(DT))
         .setpoint(setpoint)
@@ -321,7 +291,7 @@ pub fn main() {
     let mut state = INITIAL_STATE;
 
     // how many lookahead periods we should do
-    let num_chunks = 8;
+    let num_chunks = 4;
 
     for _ in 0..num_chunks {
         let mpc_problem = get_mpc_problem(state, GOAL);
@@ -336,7 +306,7 @@ pub fn main() {
             .unwrap();
         #[cfg(not(debug_assertions))]
         let res = Executor::new(mpc_problem, solver)
-            .configure(|state| state.max_iters(10000))
+            .configure(|state| state.max_iters(30000))
             .run()
             .unwrap();
 
