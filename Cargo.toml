@@ -2,6 +2,11 @@
 name = "simple_model_predictive_control"
 version = "0.1.0"
 edition = "2024"
+authors = ["Henry Gerard Moore"]
+description = "A simple implementation of model predictive control in pure Rust"
+repository = "https://github.com/henrygerardmoore/simple_model_predictive_control"
+license = "MIT OR Apache-2.0"
+keywords = ["mpc","model-predictive-control","model-predictive","argmin","nonlinear","control"]
 
 [dependencies]
 argmin = {version="0.11.0", features=["rayon"]}
