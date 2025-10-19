@@ -165,7 +165,7 @@ fn plot(trajectory: Array1<[f64; STATE_SIZE]>) -> Result<(), Box<dyn std::error:
                 format!("Cartpole MPC Trajectory (t = {:.1})", (i as f64) * DT),
                 ("sans-serif", 50),
             )
-            .build_cartesian_2d(-1.0 * aspect_ratio..1.0 * aspect_ratio, -0.75..0.75)?;
+            .build_cartesian_2d(-1.0 * aspect_ratio..1.0 * aspect_ratio, -1.0..1.0)?;
 
         // draw a blue circle for the cart position
         chart.draw_series(std::iter::once(Circle::new(
