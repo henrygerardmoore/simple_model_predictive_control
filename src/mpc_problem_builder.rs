@@ -5,6 +5,7 @@ use ndarray::ArrayView1;
 
 use crate::mpc_problem::{DynamicsFunction, MPCProblem};
 
+/// A builder for [crate::mpc_problem::MPCProblem]
 #[allow(clippy::type_complexity)]
 #[derive(Default)]
 pub struct MPCProblemBuilder<const STATE_SIZE: usize, const INPUT_SIZE: usize> {
@@ -17,10 +18,10 @@ pub struct MPCProblemBuilder<const STATE_SIZE: usize, const INPUT_SIZE: usize> {
         Box<dyn Fn(&[f64; STATE_SIZE], &[f64; STATE_SIZE], &ArrayView1<f64>) -> f64 + Send + Sync>,
     >,
     terminal_cost: Option<Box<dyn Fn(&[f64; STATE_SIZE], &[f64; STATE_SIZE]) -> f64 + Send + Sync>>,
-    constraints: Vec<Box<dyn Fn(&[f64; STATE_SIZE]) -> f64 + Send + Sync>>,
 }
 
 impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCProblemBuilder<STATE_SIZE, INPUT_SIZE> {
+    /// Create a builder for [crate::mpc_problem::MPCProblem]
     pub fn new() -> Self {
         Self {
             setpoint: None,
@@ -30,30 +31,34 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCProblemBuilder<STATE_S
             dynamics_function: None,
             state_cost: None,
             terminal_cost: None,
-            constraints: Vec::new(),
         }
     }
 
+    /// See [crate::mpc_problem::MPCProblem::set_setpoint]
     pub fn setpoint(mut self, setpoint: [f64; STATE_SIZE]) -> Self {
         self.setpoint = Some(setpoint);
         self
     }
 
+    /// See [crate::mpc_problem::MPCProblem::set_current_state]
     pub fn initial_conditions(mut self, initial_conditions: [f64; STATE_SIZE]) -> Self {
         self.current_state = Some(initial_conditions);
         self
     }
 
+    /// See [crate::mpc_problem::MPCProblem::set_sample_period]
     pub fn sample_period(mut self, sample_period: Duration) -> Self {
         self.sample_period = Some(sample_period);
         self
     }
 
+    /// See [crate::mpc_problem::MPCProblem::set_lookahead]
     pub fn lookahead_duration(mut self, lookahead_duration: Duration) -> Self {
         self.lookahead_duration = Some(lookahead_duration);
         self
     }
 
+    /// See [crate::mpc_problem::DynamicsFunction]
     pub fn dynamics_function(
         mut self,
         dynamics_function: DynamicsFunction<STATE_SIZE, INPUT_SIZE>,
@@ -62,6 +67,7 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCProblemBuilder<STATE_S
         self
     }
 
+    /// See [crate::mpc_problem::MPCProblem::state_cost]
     pub fn state_cost<F>(mut self, state_cost: F) -> Self
     where
         F: Fn(&[f64; STATE_SIZE], &[f64; STATE_SIZE], &ArrayView1<f64>) -> f64
@@ -73,6 +79,7 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCProblemBuilder<STATE_S
         self
     }
 
+    /// See [crate::mpc_problem::MPCProblem::terminal_cost]
     pub fn terminal_cost<F>(mut self, terminal_cost: F) -> Self
     where
         F: Fn(&[f64; STATE_SIZE], &[f64; STATE_SIZE]) -> f64 + Send + Sync + 'static,
@@ -81,14 +88,7 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCProblemBuilder<STATE_S
         self
     }
 
-    pub fn add_constraint<F>(mut self, constraint: F) -> Self
-    where
-        F: Fn(&[f64; STATE_SIZE]) -> f64 + Send + Sync + 'static,
-    {
-        self.constraints.push(Box::new(constraint));
-        self
-    }
-
+    /// Build the MPCProblem
     pub fn build(self) -> Result<MPCProblem<STATE_SIZE, INPUT_SIZE>, String> {
         if self.state_cost.is_none() && self.terminal_cost.is_none() {
             return Err("at least one of state_cost or terminal_cost must be provided".to_string());

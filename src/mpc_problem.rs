@@ -7,16 +7,25 @@ use ndarray::{
     parallel::prelude::{IntoParallelRefIterator, ParallelIterator},
 };
 
-// the MPCController can take a function that returns the derivative and integrate it internally as needed
-// or a function that takes a state and a dt and returns the next state
-// if you want fine control of the integration or have dynamics that cannot be captured by a derivative, then you should use Discrete
-#[allow(clippy::type_complexity)]
+/// The dynamics function used by [MPCProblem]
+/// The [MPCProblem] takes either:
+/// - a function that returns the derivative and integrates it internally as needed
+///
+/// OR
+///
+/// - a function that takes a state and a time delta and returns the next state
+///
+/// If you want fine control of the integration or have dynamics that cannot be captured by a derivative, then you should use [DynamicsFunction::Discrete]
+#[allow(
+    clippy::type_complexity,
+    reason = "dynamics function closures have complex types"
+)]
 pub enum DynamicsFunction<const STATE_SIZE: usize, const INPUT_SIZE: usize> {
-    // f(x, u) -> xdot
+    /// f(x, u) -> xdot
     Continuous(
         Box<dyn Fn(&[f64; STATE_SIZE], &ArrayView1<f64>) -> [f64; STATE_SIZE] + Send + Sync>,
     ),
-    // f(x_k, u_k, dt) -> x_{k+1}
+    /// f(x_k, u_k, dt) -> x_{k+1}
     Discrete(
         Box<
             dyn Fn(&[f64; STATE_SIZE], &ArrayView1<f64>, Duration) -> [f64; STATE_SIZE]
@@ -26,7 +35,11 @@ pub enum DynamicsFunction<const STATE_SIZE: usize, const INPUT_SIZE: usize> {
     ),
 }
 
-#[allow(clippy::type_complexity)]
+/// The Model-Predictive Control problem, formulated as a problem solvable by `argmin`
+#[allow(
+    clippy::type_complexity,
+    reason = "cost function closures have complex types"
+)]
 pub struct MPCProblem<const STATE_SIZE: usize, const INPUT_SIZE: usize> {
     pub(crate) setpoint: [f64; STATE_SIZE],
     pub(crate) current_state: [f64; STATE_SIZE],
@@ -34,17 +47,20 @@ pub struct MPCProblem<const STATE_SIZE: usize, const INPUT_SIZE: usize> {
     pub(crate) lookahead_duration: Duration,
     pub(crate) dynamics_function: DynamicsFunction<STATE_SIZE, INPUT_SIZE>,
 
-    // MPC controller must have at least one of the below cost functions
-    // optional state/input cost function, J(x, u) -> f64
+    /// `MPCProblem` must have at least one of `state_cost` and `terminal_cost`.
+    /// Optional state/input cost function, J(x, u) -> f64
     pub(crate) state_cost: Option<
         Box<dyn Fn(&[f64; STATE_SIZE], &[f64; STATE_SIZE], &ArrayView1<f64>) -> f64 + Send + Sync>,
     >,
 
-    // optional terminal cost function, J(x, x_setpoint) -> f64
+    /// `MPCProblem` must have at least one of `state_cost` and `terminal_cost`.
+    /// Optional terminal cost function, J(x, x_setpoint) -> f64
     pub(crate) terminal_cost:
         Option<Box<dyn Fn(&[f64; STATE_SIZE], &[f64; STATE_SIZE]) -> f64 + Send + Sync>>,
 }
 
+/// Implement `argmin`'s `CostFunction` type.
+/// This allows usage of any gradient-free optimizer from `argmin`.
 impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> CostFunction
     for MPCProblem<STATE_SIZE, INPUT_SIZE>
 {
@@ -52,6 +68,8 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> CostFunction
 
     type Output = f64;
 
+    /// Calculate the trajectory for a given series of inputs,
+    /// then calculate the cost of that trajectory.
     fn cost(&self, x: &Self::Param) -> Result<Self::Output, argmin::core::Error> {
         let x_view = x.view();
         let trajectory = self.calculate_trajectory(&x_view);
@@ -59,7 +77,7 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> CostFunction
         Ok(trajectory_cost)
     }
 
-    // only particle swarm optimization in argmin currently supports this
+    /// Only particle swarm optimization in argmin currently supports this.
     fn bulk_cost<P>(&self, params: &[P]) -> Result<Vec<Self::Output>, argmin_math::Error>
     where
         P: std::borrow::Borrow<Self::Param> + argmin::core::SyncAlias,
@@ -71,6 +89,7 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> CostFunction
 }
 
 impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCProblem<STATE_SIZE, INPUT_SIZE> {
+    /// Simple euler integration for ODEs
     pub(crate) fn integrate_dynamics(
         &self,
         current_state: &[f64; STATE_SIZE],
@@ -84,8 +103,8 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCProblem<STATE_SIZE, IN
         next_state
     }
 
-    // maps the inputs to the trajectory they would result in
-    // useful for visualization
+    /// Maps the inputs to the trajectory they would result in.
+    /// This is useful for visualization.
     pub fn calculate_trajectory(&self, inputs: &ArrayView1<f64>) -> Array1<[f64; STATE_SIZE]> {
         let mut current_state = self.current_state;
         let input_chunks = Self::inputs_to_chunks(inputs);
@@ -106,7 +125,7 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCProblem<STATE_SIZE, IN
         Array::from_iter(trajectory_iter)
     }
 
-    // changes the inputs from a 1D array to a 2D array where every row is a step and every column is an input
+    /// Changes the inputs from a 1D array to a 2D array where every row is a step and every column is an input.
     pub(crate) fn inputs_to_chunks<'a>(inputs: &ArrayView1<'a, f64>) -> ArrayView2<'a, f64> {
         assert!(
             inputs.len().is_multiple_of(INPUT_SIZE),
@@ -120,7 +139,7 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCProblem<STATE_SIZE, IN
         unsafe { ArrayView2::from_shape_ptr((n_steps, INPUT_SIZE), inputs.as_ptr()) }
     }
 
-    // calculates the cost of a given trajectory
+    /// Calculates the cost of a given trajectory
     pub(crate) fn calculate_trajectory_cost(
         &self,
         trajectory: &Array1<[f64; STATE_SIZE]>,
@@ -151,22 +170,29 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCProblem<STATE_SIZE, IN
                 .unwrap_or(0.)
     }
 
-    // set the duration over which the control problem will be optimized
+    /// Set the duration over which the control problem will be optimized
     pub fn set_lookahead(&mut self, lookahead_duration: Duration) {
         self.lookahead_duration = lookahead_duration;
     }
 
-    // set the timestep of the controller
-    // the lookahead duration divided by the sample period (rounded up) gives the number of control inputs returned
+    /// Set the timestep of the controller.
+    /// The lookahead duration divided by the sample period (rounded up) gives the number of control inputs returned.
     pub fn set_sample_period(&mut self, sample_period: Duration) {
         self.sample_period = sample_period;
     }
 
+    /// Set the target state of the controller.
+    /// Used only in user-defined cost and dynamics functions.
     pub fn set_setpoint(&mut self, setpoint: [f64; STATE_SIZE]) {
         self.setpoint = setpoint;
     }
 
-    // this function provides a sample parameter vector for use with the Nelder Mead optimizer
+    /// Set the current state of the controller.
+    pub fn set_current_state(&mut self, current_state: [f64; STATE_SIZE]) {
+        self.current_state = current_state;
+    }
+
+    /// This function provides a sample parameter vector for use with the Nelder-Mead optimizer.
     pub fn parameter_vector(&self, max_input: f64) -> Vec<Array1<f64>> {
         // TODO add warm start
         let num_steps = (self.lookahead_duration.as_secs_f64() / self.sample_period.as_secs_f64())
