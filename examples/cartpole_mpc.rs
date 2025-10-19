@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use argmin::{core::Executor, solver::particleswarm::ParticleSwarm};
+use argmin::{core::Executor, solver::neldermead::NelderMead};
 use ndarray::{Array1, ArrayView1};
 
 use mpc_rs::prelude::*;
@@ -19,7 +19,7 @@ const INPUT_SIZE: usize = 1;
 // timestep
 const DT: f64 = 0.05;
 
-const LOOKAHEAD: f64 = 1.0;
+const LOOKAHEAD: f64 = 2.0;
 
 // cart in center, rod pointing straight up
 const GOAL: [f64; 4] = [0., 0., PI, 0.];
@@ -230,15 +230,11 @@ pub fn main() {
 
     // how many lookahead periods we should do
     let num_chunks = 5;
-    let n = (LOOKAHEAD / DT).ceil() as usize;
 
     for _ in 0..num_chunks {
         let mpc_problem = get_mpc_problem(initial_state, GOAL);
 
-        let lower_bounds = Array1::from_vec(vec![-INPUT_MAX; n]);
-        let upper_bounds = Array1::from_vec(vec![INPUT_MAX; n]);
-
-        let solver = ParticleSwarm::new((lower_bounds, upper_bounds.clone()), 1000);
+        let solver = NelderMead::new(mpc_problem.parameter_vector());
         // Run solver
         // plotting is actually the slowest part when in debug mode, but solving is also much slower of course
         #[cfg(debug_assertions)]
@@ -248,7 +244,7 @@ pub fn main() {
             .unwrap();
         #[cfg(not(debug_assertions))]
         let res = Executor::new(mpc_problem, solver)
-            .configure(|state| state.max_iters(100))
+            .configure(|state| state.max_iters(10000))
             .run()
             .unwrap();
 
@@ -256,7 +252,7 @@ pub fn main() {
 
         // update start position and append to overall trajectory
         let this_trajectory =
-            mpc_problem.calculate_trajectory(&res.state.best_individual.unwrap().position.view());
+            mpc_problem.calculate_trajectory(&res.state.best_param.unwrap().view());
         // let this_trajectory = mpc_problem.calculate_trajectory(&Array1::from_vec(vec![10.; n]).view());
         trajectory
             .append(ndarray::Axis(0), this_trajectory.view())
