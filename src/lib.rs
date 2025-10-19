@@ -31,8 +31,7 @@ pub enum DynamicsFunction<const STATE_SIZE: usize, const INPUT_SIZE: usize> {
 
 #[allow(clippy::type_complexity)]
 pub struct MPCController<const STATE_SIZE: usize, const INPUT_SIZE: usize> {
-    // WIP refactor terminal_cost function to take setpoint, too
-    _setpoint: [f64; STATE_SIZE],
+    setpoint: [f64; STATE_SIZE],
     current_state: [f64; STATE_SIZE],
     sample_period: Duration,
     lookahead_duration: Duration,
@@ -42,8 +41,8 @@ pub struct MPCController<const STATE_SIZE: usize, const INPUT_SIZE: usize> {
     // optional state/input cost function, J(x, u) -> f64
     state_cost: Option<Box<dyn Fn(&[f64; STATE_SIZE], &[f64; INPUT_SIZE]) -> f64 + Send + Sync>>,
 
-    // optional terminal cost function, J(x) -> f64
-    terminal_cost: Option<Box<dyn Fn(&[f64; STATE_SIZE]) -> f64 + Send + Sync>>,
+    // optional terminal cost function, J(x, x_setpoint) -> f64
+    terminal_cost: Option<Box<dyn Fn(&[f64; STATE_SIZE], &[f64; STATE_SIZE]) -> f64 + Send + Sync>>,
 
     // can be an empty vector if this is an unconstrained problem
     // C(trajectory) -> c, where c is negative if the constraint is violated
@@ -196,7 +195,7 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCController<STATE_SIZE,
                 .last()
                 .map(|terminal_state| {
                     if let Some(terminal_cost_function) = &self.terminal_cost {
-                        terminal_cost_function(terminal_state)
+                        terminal_cost_function(terminal_state, &self.setpoint)
                     } else {
                         0.
                     }
@@ -224,6 +223,11 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCController<STATE_SIZE,
     pub fn set_sample_period(&mut self, sample_period: Duration) {
         self.sample_period = sample_period;
     }
+
+    pub fn set_setpoint(&mut self, setpoint: [f64; STATE_SIZE]) {
+        self.setpoint = setpoint;
+    }
 }
 
 // WIP add unit tests
+// WIP add integration tests
