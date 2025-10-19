@@ -321,7 +321,7 @@ pub fn main() {
     let mut state = INITIAL_STATE;
 
     // how many lookahead periods we should do
-    let num_chunks = 4;
+    let num_chunks = 8;
 
     for _ in 0..num_chunks {
         let mpc_problem = get_mpc_problem(state, GOAL);
