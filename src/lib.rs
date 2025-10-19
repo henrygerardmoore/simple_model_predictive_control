@@ -8,7 +8,7 @@
 //! This is a rust implementation of Model Predictive Control (MPC).
 //! It intends to provide a simple framework to define MPC as an [argmin](https://github.com/argmin-rs/argmin) problem.
 //! I created this library for a simple, pure-rust MPC implementation with no code generation.
-//! See the [repository](github.com/henrygerardmoore/mpc_rs/) for more information.
+//! See the [repository](github.com/henrygerardmoore/simple_model_predictive_control/) for more information.
 
 pub mod mpc_problem;
 pub mod mpc_problem_builder;

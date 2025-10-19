@@ -6,9 +6,9 @@ use std::{
 use argmin::{core::Executor, solver::neldermead::NelderMead};
 use ndarray::{Array1, Array2, ArrayView1, array};
 
-use mpc_rs::prelude::*;
 use ndarray_linalg::Solve;
 use plotters::prelude::*;
+use simple_model_predictive_control::prelude::*;
 
 // link 1 angle CCW from right (rad), link 2 angle of deflection CCW *from link 1* (rad), link 1 angular velocity (rad/s), link 2 angular velocity (rad/s)
 const STATE_SIZE: usize = 4;

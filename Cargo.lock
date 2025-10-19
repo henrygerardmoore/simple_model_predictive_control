@@ -1138,20 +1138,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mpc_rs"
-version = "0.1.0"
-dependencies = [
- "argmin",
- "argmin-math",
- "argmin-observer-slog",
- "env_logger",
- "log",
- "ndarray",
- "ndarray-linalg",
- "plotters",
-]
-
-[[package]]
 name = "ndarray"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1789,6 +1775,20 @@ name = "simd-adler32"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d66dc143e6b11c1eddc06d5c423cfc97062865baf299914ab64caa38182078fe"
+
+[[package]]
+name = "simple_model_predictive_control"
+version = "0.1.0"
+dependencies = [
+ "argmin",
+ "argmin-math",
+ "argmin-observer-slog",
+ "env_logger",
+ "log",
+ "ndarray",
+ "ndarray-linalg",
+ "plotters",
+]
 
 [[package]]
 name = "slog"

@@ -1,4 +1,4 @@
-# MPC_RS
+# simple_model_predictive_control
 
 This is a rust implementation of Model Predictive Control (MPC).
 
@@ -11,7 +11,7 @@ Check out the [tracking issue for autodiff](https://github.com/rust-lang/rust/is
 
 ## Benefits
 
-MPC RS is lightweight, simple to set up, requires no hand calculation of gradients, and can be used out of the box with `argmin` optimizers.
+`simple_model_predictive_control` is lightweight, simple to set up, requires no hand calculation of gradients, and can be used out of the box with `argmin` optimizers.
 
 It supports both simple continuous dynamics (Euler integration of an ODE) and custom discrete dynamics.
 Discrete dynamics functions can be used for dynamics that cannot be expressed as ODEs, using external physics simulation as the dynamics, or enforcing constraints.

@@ -6,8 +6,8 @@ use std::{
 use argmin::{core::Executor, solver::neldermead::NelderMead};
 use ndarray::{Array1, ArrayView1};
 
-use mpc_rs::prelude::*;
 use plotters::{prelude::*, style::full_palette::GREY};
+use simple_model_predictive_control::prelude::*;
 
 // cart position (m), cart velocity (m/s), angle (rad), angular velocity (rad)
 // the angle state is positive CCW and

@@ -4,8 +4,8 @@ use argmin::core::Executor;
 use argmin::solver::neldermead::NelderMead;
 use ndarray::{Array1, ArrayView1};
 
-use mpc_rs::prelude::*;
 use plotters::prelude::*;
+use simple_model_predictive_control::prelude::*;
 
 // x, x velocity, y, y velocity
 const STATE_SIZE: usize = 4;

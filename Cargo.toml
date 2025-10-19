@@ -1,5 +1,5 @@
 [package]
-name = "mpc_rs"
+name = "simple_model_predictive_control"
 version = "0.1.0"
 edition = "2024"
 
