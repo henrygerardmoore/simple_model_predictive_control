@@ -3,8 +3,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use argmin::{core::Executor, solver::neldermead::NelderMead};
-use ndarray::{Array1, Array2, ArrayView1, array};
+use argmin::{
+    core::Executor,
+    solver::{linesearch::MoreThuenteLineSearch, quasinewton::LBFGS},
+};
+use ndarray::{Array1, Array2, ArrayView1, array, s};
 
 use ndarray_linalg::Solve;
 use plotters::prelude::*;
@@ -20,7 +23,7 @@ const INPUT_SIZE: usize = 1;
 const DT: f64 = 0.05; // (s)
 
 // lookahead time (s)
-const LOOKAHEAD: f64 = 5.;
+const LOOKAHEAD: f64 = 5.0;
 
 // start pointing straight down
 const INITIAL_STATE: [f64; 4] = [-PI / 2., 0., 0., 0.];
@@ -33,11 +36,11 @@ const GRAVITY: f64 = -9.80665; // m/s^2
 const L1: f64 = 2.0; // m
 // length to center of 1
 const LC1: f64 = L1 / 2.0;
-const L2: f64 = 2.0; // m
+const L2: f64 = 1.8; // m
 // length to center of 2
 const LC2: f64 = L2 / 2.0;
-const M1: f64 = 0.5; // kg
-const M2: f64 = 0.5; // kg
+const M1: f64 = 3.0; // kg
+const M2: f64 = 2.0; // kg
 // moments of inertia of a rod about its end
 const I1: f64 = 1. / 3. * M1 * L1 * L1; // kg m^2
 const I2: f64 = 1. / 3. * M2 * L2 * L2; // kg m^2
@@ -98,7 +101,7 @@ fn state_derivative(state: &[f64; STATE_SIZE], input: &ArrayView1<f64>) -> [f64;
 
     let second_derivative = m.solve_into(rhs.column(0).to_owned()).unwrap();
 
-    let friction_coeff = 0.1;
+    let friction_coeff = 0.;
 
     [
         state[2],
@@ -237,13 +240,13 @@ fn plot(trajectory: Array1<[f64; STATE_SIZE]>) -> Result<(), Box<dyn std::error:
         // draw first link as thick red
         chart.draw_series(LineSeries::new(
             std::iter::once((0., 0.)).chain(std::iter::once((point[0], point[1]))),
-            RED.filled().stroke_width(5),
+            RED.filled().stroke_width(6),
         ))?;
 
-        // draw second link as thinner blue
+        // draw second link as thinner blue (proportionally sized so its mass makes sense)
         chart.draw_series(LineSeries::new(
             std::iter::once((point[0], point[1])).chain(std::iter::once((point[2], point[3]))),
-            BLUE.filled().stroke_width(3),
+            BLUE.filled().stroke_width(4),
         ))?;
 
         root.present()?;
@@ -291,30 +294,39 @@ pub fn main() {
     let mut state = INITIAL_STATE;
 
     // how many lookahead periods we should do
-    let num_chunks = 4;
+    let num_chunks = 8;
+    let n = (LOOKAHEAD / DT).ceil() as usize;
+    let n_half = (LOOKAHEAD / 2. / DT).ceil() as usize;
+    let mut init_param = Array1::zeros(n * INPUT_SIZE);
+    for v in init_param.iter_mut() {
+        *v += rand::random::<f64>() * 0.01; // small random torque
+    }
+
+    let linesearch = MoreThuenteLineSearch::new().with_c(1e-4, 0.9).unwrap();
 
     for _ in 0..num_chunks {
         let mpc_problem = get_mpc_problem(state, GOAL);
 
-        let solver = NelderMead::new(mpc_problem.parameter_vector(INPUT_MAX));
+        let solver = LBFGS::new(linesearch.clone(), 7);
         // Run solver
         // plotting is actually the slowest part when in debug mode, but solving is also much slower of course
         #[cfg(debug_assertions)]
         let res = Executor::new(mpc_problem, solver)
-            .configure(|state| state.max_iters(1000))
+            .configure(|state| state.param(init_param.clone()).max_iters(1000))
             .run()
             .unwrap();
         #[cfg(not(debug_assertions))]
         let res = Executor::new(mpc_problem, solver)
-            .configure(|state| state.max_iters(30000))
+            .configure(|state| state.param(init_param.clone()).max_iters(10000))
             .run()
             .unwrap();
 
         let mpc_problem = get_mpc_problem(state, GOAL);
 
         // update start position and append to overall trajectory
-        let this_trajectory =
-            mpc_problem.calculate_trajectory(&res.state.best_param.unwrap().view());
+        // only use first half of inputs
+        let inputs = res.state.best_param.unwrap();
+        let this_trajectory = mpc_problem.calculate_trajectory(&inputs.slice(s![..n_half]));
         trajectory
             .append(ndarray::Axis(0), this_trajectory.view())
             .unwrap();
@@ -326,7 +338,7 @@ pub fn main() {
     let elapsed = now.elapsed();
     println!(
         "MPC simulation of {:.1} seconds complete in {:.1} seconds, now plotting...",
-        (num_chunks as f64) * LOOKAHEAD,
+        (num_chunks as f64) * LOOKAHEAD / 2.,
         elapsed.as_secs_f64()
     );
     plot(trajectory).unwrap();
