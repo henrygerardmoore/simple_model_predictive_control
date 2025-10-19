@@ -170,7 +170,7 @@ fn terminal_cost(state: &[f64; STATE_SIZE], setpoint: &[f64; STATE_SIZE]) -> f64
 fn state_cost(
     state: &[f64; STATE_SIZE],
     setpoint: &[f64; STATE_SIZE],
-    command: &ArrayView1<f64>,
+    _command: &ArrayView1<f64>,
 ) -> f64 {
     // let the first link deviate a bit without penalty
     let angle_tolerance = 0.0;
@@ -178,8 +178,6 @@ fn state_cost(
     5. * (angle_difference(state[0], setpoint[0]) - angle_tolerance).max(0.).powi(2)
     // smaller penalty for second link
     + angle_difference(state[1], setpoint[1]).powi(2)
-    // penalize high commands a little bit
-    // + 0.0001 * command.dot(command)
 }
 
 fn angle_difference(theta_1: f64, theta_2: f64) -> f64 {
