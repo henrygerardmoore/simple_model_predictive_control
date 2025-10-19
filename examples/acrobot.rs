@@ -7,10 +7,10 @@ use argmin::{core::Executor, solver::neldermead::NelderMead};
 use ndarray::{Array1, Array2, ArrayView1, array};
 
 use mpc_rs::prelude::*;
-use ndarray_linalg::Solve;
+use ndarray_linalg::{Determinant, Solve};
 use plotters::prelude::*;
 
-// link 1 angle CCW from down (rad), link 2 angle of deflection CCW *from link 1* (rad), link 1 angular velocity (rad/2), link 2 angular velocity (rad/s)
+// link 1 angle CCW from right (rad), link 2 angle of deflection CCW *from link 1* (rad), link 1 angular velocity (rad/s), link 2 angular velocity (rad/s)
 const STATE_SIZE: usize = 4;
 
 // torque on link 1 (N*m)
@@ -23,19 +23,19 @@ const DT: f64 = 0.05; // (s)
 const LOOKAHEAD: f64 = 2.5;
 
 // both arms pointing straight up
-const GOAL: [f64; 4] = [PI, 0., 0., 0.];
+const GOAL: [f64; 4] = [PI / 2., 0., 0., 0.];
 
 // acrobot parameters
 const INPUT_MAX: f64 = 200.; // N*m
-const GRAVITY: f64 = 9.80665; // m/s^2
-const L1: f64 = 0.5; // m
+const GRAVITY: f64 = -9.80665; // m/s^2
+const L1: f64 = 2.0; // m
 // length to center of 1
 const LC1: f64 = L1 / 2.0;
-const L2: f64 = 0.5; // m
+const L2: f64 = 2.0; // m
 // length to center of 2
 const LC2: f64 = L2 / 2.0;
-const M1: f64 = 0.25; // kg
-const M2: f64 = 0.25; // kg
+const M1: f64 = 0.5; // kg
+const M2: f64 = 0.5; // kg
 // moments of inertia of a rod about its end
 const I1: f64 = 1. / 3. * M1 * L1 * L1; // kg m^2
 const I2: f64 = 1. / 3. * M2 * L2 * L2; // kg m^2
@@ -45,24 +45,29 @@ fn mass_matrix(state: &[f64; STATE_SIZE]) -> Array2<f64> {
     let theta2 = state[1];
     array![
         [
-            I1 + I2 + M2 * L1.powi(2) + 2. * M2 * L1 * LC2 * theta2.cos(),
-            I2 + M2 * L1 * LC2 * theta2.cos()
+            M1 * LC1.powi(2)
+                + M2 * (L1.powi(2) + LC2.powi(2) + 2. * L1 * LC2 * theta2.cos())
+                + I1
+                + I2,
+            M2 * (LC2.powi(2) + L1 * LC2 * theta2.cos()) + I2
         ],
-        [I2 + M2 * L1 * LC2 * theta2.cos(), I2]
+        [
+            M2 * (LC2.powi(2) + L1 * LC2 * theta2.cos()) + I2,
+            M2 * LC2.powi(2) + I2
+        ]
     ]
 }
 
-// get capital C (2x2) as a function of the state
-fn damping_matrix(state: &[f64; STATE_SIZE]) -> Array2<f64> {
+// get the contribution from derivatives (2x1) as a function of the state
+fn coriolis_matrix(state: &[f64; STATE_SIZE]) -> Array2<f64> {
     let theta2 = state[1];
     let omega1 = state[2];
     let omega2 = state[3];
+
     array![
-        [
-            -2. * M2 * L1 * LC2 * theta2.sin() * omega2,
-            -M2 * L1 * LC2 * theta2.sin() * omega2
-        ],
-        [M2 * L1 * LC2 * theta2.sin() * omega1, 0.]
+        [-M2 * L1 * LC2 * theta2.sin() * omega2.powi(2)
+            - 2. * M2 * L1 * LC2 * theta2.sin() * omega2 * omega1],
+        [M2 * L1 * LC2 * theta2.sin() * omega1.powi(2)]
     ]
 }
 
@@ -71,13 +76,75 @@ fn gravity_torque_matrix(state: &[f64; STATE_SIZE]) -> Array2<f64> {
     let theta1 = state[0];
     let theta2 = state[1];
     array![
-        [-M1 * GRAVITY * LC1 * theta1.sin()
-            - M2 * GRAVITY * (L1 * theta1.sin() + LC2 * (theta1 + theta2).sin())],
-        [-M2 * GRAVITY * LC2 * (theta1 + theta2).sin()]
+        [(M1 * LC1 + M2 * L1) * GRAVITY * theta1.cos()
+            + M2 * LC2 * GRAVITY * (theta1 + theta2).cos()],
+        [M2 * LC2 * GRAVITY * (theta1 + theta2).cos()]
     ]
 }
 
-// dynamics for this example are from https://underactuated.mit.edu/acrobot.html#section1
+// use analytic 2x2 inverse
+fn qdd_from_m_rhs(m: &Array2<f64>, rhs: &Array1<f64>) -> [f64; 2] {
+    let m_inv = 1. / m.det().unwrap() * array![[m[(1, 1)], -m[(0, 1)]], [-m[(1, 0)], m[(0, 0)]]];
+    let qdd = m_inv * rhs;
+    [qdd[(0, 0)], qdd[(1, 0)]]
+}
+
+// return function's derivatives at a given state and with a given input
+fn state_derivative(state: &[f64; STATE_SIZE], input: &ArrayView1<f64>) -> [f64; STATE_SIZE] {
+    let fx = input[0].clamp(-INPUT_MAX, INPUT_MAX);
+    // input mapping matrix
+    let b = array![[0.], [1.]];
+    let m = mass_matrix(&state);
+    let c = coriolis_matrix(&state);
+    let tau = gravity_torque_matrix(&state);
+
+    // right-hand side of M * second_derivative equation (2x1)
+    let rhs = tau + b * fx - c;
+
+    // let second_derivative = m.solve_into(rhs.column(0).to_owned()).unwrap();
+    let second_derivative = qdd_from_m_rhs(&m, &rhs.column(0).to_owned());
+
+    let friction_coeff = 0.2;
+
+    [
+        state[2],
+        state[3],
+        second_derivative[0] - friction_coeff * state[2],
+        second_derivative[1] - friction_coeff * state[3],
+    ]
+}
+
+// integrate with RK4 instead of explicit euler for stability
+fn rk4_step(state: &[f64; STATE_SIZE], input: &ArrayView1<f64>, dt: f64) -> [f64; STATE_SIZE] {
+    let k1 = state_derivative(state, input);
+
+    let mut tmp = [0.0; STATE_SIZE];
+    for i in 0..STATE_SIZE {
+        tmp[i] = state[i] + 0.5 * dt * k1[i];
+    }
+    let k2 = state_derivative(&tmp, input);
+
+    for i in 0..STATE_SIZE {
+        tmp[i] = state[i] + 0.5 * dt * k2[i];
+    }
+    let k3 = state_derivative(&tmp, input);
+
+    for i in 0..STATE_SIZE {
+        tmp[i] = state[i] + dt * k3[i];
+    }
+    let k4 = state_derivative(&tmp, input);
+
+    let mut new_state = [0.0; STATE_SIZE];
+    for i in 0..STATE_SIZE {
+        new_state[i] = state[i] + dt * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]) / 6.0;
+    }
+    // wrap angles
+    new_state[0] = new_state[0].rem_euclid(TAU);
+    new_state[1] = new_state[1].rem_euclid(TAU);
+    new_state
+}
+
+// dynamics for this example are from https://courses.ece.ucsb.edu/ECE179/179D_S12Byl/hw/acrobot_swingup.pdf
 fn dynamics_function(
     state: &[f64; STATE_SIZE],
     input: &ArrayView1<f64>,
@@ -87,31 +154,10 @@ fn dynamics_function(
     if dt <= 0. {
         return state.clone();
     }
-    let fx = input[0].clamp(-INPUT_MAX, INPUT_MAX);
-
-    let n_euler_steps = 5;
-    let dt = dt / (n_euler_steps as f64);
+    let n_rk4_steps = 20;
     let mut state = state.clone();
-
-    // input mapping matrix
-    let b = array![[0.], [1.]];
-
-    // fine euler integration
-    for _ in 0..n_euler_steps {
-        let m = mass_matrix(&state);
-        let c = damping_matrix(&state);
-        let tau = gravity_torque_matrix(&state);
-        let first_deriv = array![[state[2]], [state[3]]];
-
-        // right-hand side of M * second_derivative equation (2x1)
-        let rhs = tau + b.clone() * fx - c * first_deriv;
-
-        let second_derivative = m.solve_into(rhs.column(0).to_owned()).unwrap();
-
-        state[0] = (state[0] + dt * state[2]).rem_euclid(TAU);
-        state[1] = (state[1] + dt * state[3]).rem_euclid(TAU);
-        state[2] += dt * second_derivative[0];
-        state[3] += dt * second_derivative[1];
+    for _ in 0..n_rk4_steps {
+        state = rk4_step(&state, input, dt / (n_rk4_steps as f64));
     }
     state
 }
@@ -162,13 +208,17 @@ fn plot(trajectory: Array1<[f64; STATE_SIZE]>) -> Result<(), Box<dyn std::error:
         let point = trajectory[i];
 
         let aspect_ratio = 1280. / 720.;
+        let y_bound = 4.0;
 
         let mut chart = ChartBuilder::on(&root)
             .caption(
                 format!("Acrobot MPC Trajectory (t = {:.1})", (i as f64) * DT),
                 ("sans-serif", 50),
             )
-            .build_cartesian_2d(-1.0 * aspect_ratio..1.0 * aspect_ratio, -0.75..0.75)?;
+            .build_cartesian_2d(
+                -y_bound * aspect_ratio..y_bound * aspect_ratio,
+                -y_bound..y_bound,
+            )?;
 
         // draw both links as lines
 
@@ -201,12 +251,12 @@ fn plot(trajectory: Array1<[f64; STATE_SIZE]>) -> Result<(), Box<dyn std::error:
 fn trajectory_to_plot_format(trajectory: &mut Array1<[f64; 4]>) {
     trajectory.iter_mut().for_each(|state| {
         // tip of first link
-        let x1 = L1 * state[0].sin();
-        let y1 = -L1 * state[0].cos();
+        let x1 = L1 * state[0].cos();
+        let y1 = L1 * state[0].sin();
 
         // tip of second link
-        let x2 = x1 + L2 * (state[0] + state[1]).sin();
-        let y2 = y1 - L2 * (state[0] + state[1]).cos();
+        let x2 = x1 + L2 * (state[0] + state[1]).cos();
+        let y2 = y1 + L2 * (state[0] + state[1]).sin();
 
         state[0] = x1;
         state[1] = y1;
@@ -225,7 +275,7 @@ pub fn main() {
     let now = Instant::now();
     let mut trajectory = Array1::<[f64; 4]>::default(0);
 
-    let mut initial_state = [0., 0., 0., 0.];
+    let mut initial_state = [0., -PI / 2., 0., 0.];
 
     // how many lookahead periods we should do
     let num_chunks = 5;
@@ -252,7 +302,6 @@ pub fn main() {
         // update start position and append to overall trajectory
         let this_trajectory =
             mpc_problem.calculate_trajectory(&res.state.best_param.unwrap().view());
-        // let this_trajectory = mpc_problem.calculate_trajectory(&Array1::from_vec(vec![10.; n]).view());
         trajectory
             .append(ndarray::Axis(0), this_trajectory.view())
             .unwrap();
