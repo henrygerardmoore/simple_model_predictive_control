@@ -6,8 +6,8 @@ It intends to provide a simple framework to define MPC as an [argmin](https://gi
 
 I created this library for a simple, pure-rust MPC implementation with no code generation.
 
-I originally intended to use `std::autodiff` to enable usage of gradient-based optimizers, but found the necessity of using an experimental compiler to be prohibitive to development.
-Check out the [tracking issue for autodiff](https://github.com/rust-lang/rust/issues/124509) if you're interested in this.
+I originally intended to use `std::autodiff` (check out its [tracking issue](https://github.com/rust-lang/rust/issues/124509) if you're interested in this) to enable usage of gradient-based optimizers, but found the necessity of using an experimental compiler to be prohibitive to development.
+Thus, I use the `finitediff` crate (also created by `argmin`) for this purpose.
 
 ## Benefits
 
@@ -47,6 +47,10 @@ I added the `bulk_cost` function to the MPCProblem (see the [parallel evaluation
 I did not have much luck with PSO when setting up the examples, but please let me know if you try it out and have a different experience!
 
 There may be lower-hanging fruit in the form of utilizing more (or less) ndarray. I started out by using exclusively `f64` arrays and then ended up needing to use `ndarray`s, so it is entirely possible that removing the generics from MPCProblem entirely is the way to go.
+
+### Gradient
+
+I have not experimented with using central finite difference as opposed to forward difference. It would be nice to provide a way to choose which is used so that the user can do so.
 
 ## Alternatives
 

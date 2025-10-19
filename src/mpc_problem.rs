@@ -1,7 +1,8 @@
 use core::f64;
 use std::time::Duration;
 
-use argmin::core::CostFunction;
+use argmin::core::{CostFunction, Gradient};
+use finitediff::ndarr;
 use ndarray::{
     Array, Array1, ArrayView1, ArrayView2,
     parallel::prelude::{IntoParallelRefIterator, ParallelIterator},
@@ -87,6 +88,32 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> CostFunction
         Self: argmin::core::SyncAlias,
     {
         params.par_iter().map(|p| self.cost(p.borrow())).collect()
+    }
+}
+
+impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> Gradient
+    for MPCProblem<STATE_SIZE, INPUT_SIZE>
+{
+    type Param = Array1<f64>;
+
+    type Gradient = Array1<f64>;
+
+    fn gradient(&self, param: &Self::Param) -> Result<Self::Gradient, argmin_math::Error> {
+        let f = self.cost_closure();
+        let g_forward = ndarr::forward_diff(&f);
+        g_forward(param)
+    }
+
+    fn bulk_gradient<P>(&self, params: &[P]) -> Result<Vec<Self::Gradient>, argmin_math::Error>
+    where
+        P: std::borrow::Borrow<Self::Param> + argmin::core::SyncAlias,
+        Self::Gradient: argmin::core::SendAlias,
+        Self: argmin::core::SyncAlias,
+    {
+        params
+            .par_iter()
+            .map(|p| self.gradient(p.borrow()))
+            .collect()
     }
 }
 
@@ -212,5 +239,10 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCProblem<STATE_SIZE, IN
             simplex.push(next_vec);
         }
         simplex
+    }
+
+    // wrap our cost function in a closure
+    fn cost_closure(&self) -> impl Fn(&Array1<f64>) -> Result<f64, argmin::core::Error> {
+        |x: &Array1<f64>| self.cost(x)
     }
 }
