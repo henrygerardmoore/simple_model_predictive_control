@@ -19,7 +19,7 @@ const INPUT_SIZE: usize = 1;
 // timestep
 const DT: f64 = 0.05;
 
-const LOOKAHEAD: f64 = 2.0;
+const LOOKAHEAD: f64 = 2.5;
 
 // cart in center, rod pointing straight up
 const GOAL: [f64; 4] = [0., 0., PI, 0.];
@@ -29,8 +29,8 @@ const CART_MASS: f64 = 1.; // kg
 const POLE_MASS: f64 = 0.1; // kg
 const POLE_LENGTH: f64 = 0.2; // m
 const GRAVITY: f64 = 9.80665; // m/s^2
-const CART_RAIL_BOUNDS: (f64, f64) = (-0.5, 0.5); // (N, N)
-const INPUT_MAX: f64 = 100.; // N
+const CART_RAIL_BOUNDS: (f64, f64) = (-1., 1.); // (N, N)
+const INPUT_MAX: f64 = 200.; // N
 
 // dynamics for this example are from https://underactuated.mit.edu/acrobot.html
 fn dynamics_function(
@@ -44,7 +44,7 @@ fn dynamics_function(
     }
     let fx = input[0].clamp(-INPUT_MAX, INPUT_MAX);
 
-    let n_euler_steps = 20;
+    let n_euler_steps = 5;
     let dt = dt / (n_euler_steps as f64);
     let mut state = state.clone();
 
@@ -60,11 +60,12 @@ fn dynamics_function(
 
         // now, see if our x velocity is going to carry us past the rail extents and if it is, add the force to stop the cart to fx
         let next_x_position = x + dt * vx;
-        if false && next_x_position < -CART_RAIL_BOUNDS.0 || next_x_position > CART_RAIL_BOUNDS.1 {
+        if next_x_position < CART_RAIL_BOUNDS.0 || next_x_position > CART_RAIL_BOUNDS.1 {
             // collision
             let next_x_position = next_x_position.clamp(CART_RAIL_BOUNDS.0, CART_RAIL_BOUNDS.1);
             let next_vx = 0.;
             // F = dp/dt, the force necessary to stop the cart
+            // clamp this so if dt is small this doesn't explode the math, though this isn't physically accurate
             let fx = (-vx * (CART_MASS + POLE_MASS * theta.sin().powi(2)) / dt)
                 .clamp(-INPUT_MAX, INPUT_MAX);
             // theta accel
@@ -111,14 +112,12 @@ fn dynamics_function(
 fn state_cost(
     state: &[f64; STATE_SIZE],
     setpoint: &[f64; STATE_SIZE],
-    _command: &ArrayView1<f64>,
+    command: &ArrayView1<f64>,
 ) -> f64 {
     // penalize not meeting the goal
-    (state[0] - setpoint[0]).powi(2) + 3. * (state[2] - setpoint[2]).powi(2)
+    2. * (state[0] - setpoint[0]).powi(2) + 3. * (state[2] - setpoint[2]).powi(2)
     // and high control inputs
-    // + 0.1 * command.dot(command)
-    // and a little bit for velocity
-    // + 0.001 * ((state[1] - setpoint[1]).powi(2) + (state[3] - setpoint[3]).powi(2))
+    + 0.1 * command.dot(command)
 }
 
 fn get_mpc_problem(
