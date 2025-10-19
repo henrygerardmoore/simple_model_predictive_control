@@ -232,6 +232,7 @@ const OUT_FILE_NAME: &str = "cartpole_release.gif";
 // see plotters animation example for reference:
 // https://github.com/plotters-rs/plotters/blob/master/plotters/examples/animation.rs
 pub fn main() {
+    println!("Running cartpole MPC simulation...");
     let now = Instant::now();
     let mut trajectory = Array1::<[f64; 4]>::default(0);
 

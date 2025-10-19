@@ -125,6 +125,7 @@ const OUT_FILE_NAME: &str = "simple_continuous_release.gif";
 // see plotters animation example for reference:
 // https://github.com/plotters-rs/plotters/blob/master/plotters/examples/animation.rs
 pub fn main() {
+    println!("Running simple continuous MPC simulation...");
     let mut trajectory = Array1::<[f64; 4]>::default(0);
 
     let mut initial_state = [0.; STATE_SIZE];
