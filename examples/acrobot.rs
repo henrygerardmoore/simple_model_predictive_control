@@ -29,7 +29,11 @@ const GOAL: [f64; 4] = [PI, 0., 0., 0.];
 const INPUT_MAX: f64 = 200.; // N*m
 const GRAVITY: f64 = 9.80665; // m/s^2
 const L1: f64 = 0.5; // m
+// length to center of 1
+const LC1: f64 = L1 / 2.0;
 const L2: f64 = 0.5; // m
+// length to center of 2
+const LC2: f64 = L2 / 2.0;
 const M1: f64 = 0.25; // kg
 const M2: f64 = 0.25; // kg
 // moments of inertia of a rod about its end
@@ -41,10 +45,10 @@ fn mass_matrix(state: &[f64; STATE_SIZE]) -> Array2<f64> {
     let theta2 = state[1];
     array![
         [
-            I1 + I2 + M2 * L1.powi(2) + 2. * M2 * L2 * theta2.cos(),
-            I2 + M2 * L1 * L2 * theta2.cos()
+            I1 + I2 + M2 * L1.powi(2) + 2. * M2 * L1 * LC2 * theta2.cos(),
+            I2 + M2 * L1 * LC2 * theta2.cos()
         ],
-        [I2 + M2 * L1 * L2 * theta2.cos(), I2]
+        [I2 + M2 * L1 * LC2 * theta2.cos(), I2]
     ]
 }
 
@@ -55,10 +59,10 @@ fn damping_matrix(state: &[f64; STATE_SIZE]) -> Array2<f64> {
     let omega2 = state[3];
     array![
         [
-            -2. * M2 * L1 * L2 * theta2.sin() * omega2,
-            -M2 * L1 * L2 * theta2.sin() * omega2
+            -2. * M2 * L1 * LC2 * theta2.sin() * omega2,
+            -M2 * L1 * LC2 * theta2.sin() * omega2
         ],
-        [M2 * L1 * L2 * theta2.sin() * omega1, 0.]
+        [M2 * L1 * LC2 * theta2.sin() * omega1, 0.]
     ]
 }
 
@@ -67,9 +71,9 @@ fn gravity_torque_matrix(state: &[f64; STATE_SIZE]) -> Array2<f64> {
     let theta1 = state[0];
     let theta2 = state[1];
     array![
-        [-M1 * GRAVITY * L1 * theta1.sin()
-            - M2 * GRAVITY * (L1 * theta1.sin() + L2 * (theta1 + theta2).sin())],
-        [-M2 * GRAVITY * L2 * (theta1 + theta2).sin()]
+        [-M1 * GRAVITY * LC1 * theta1.sin()
+            - M2 * GRAVITY * (L1 * theta1.sin() + LC2 * (theta1 + theta2).sin())],
+        [-M2 * GRAVITY * LC2 * (theta1 + theta2).sin()]
     ]
 }
 
