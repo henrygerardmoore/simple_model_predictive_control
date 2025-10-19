@@ -155,7 +155,8 @@ fn plot(trajectory: Array1<[f64; STATE_SIZE]>) -> Result<(), Box<dyn std::error:
     let frame_time = ((DT * 1000.).round() as u32).max(50);
     let root = BitMapBackend::gif(OUT_FILE_NAME, (1280, 720), frame_time)?.into_drawing_area();
 
-    for i in 0..trajectory.len() {
+    // step by 0.1 / DT to target ~100 fps
+    for i in (0..trajectory.len()).step_by(((0.1 / DT) as usize).max(1)) {
         root.fill(&WHITE)?;
 
         let point = trajectory[i];
