@@ -18,7 +18,6 @@ pub struct MPCControllerBuilder<const STATE_SIZE: usize, const INPUT_SIZE: usize
     >,
     terminal_cost: Option<Box<dyn Fn(&[f64; STATE_SIZE], &[f64; STATE_SIZE]) -> f64 + Send + Sync>>,
     constraints: Vec<Box<dyn Fn(&[f64; STATE_SIZE]) -> f64 + Send + Sync>>,
-    // input_bounds: Option<[(f64, f64); INPUT_SIZE]>,
 }
 
 impl<const STATE_SIZE: usize, const INPUT_SIZE: usize>
@@ -34,7 +33,6 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize>
             state_cost: None,
             terminal_cost: None,
             constraints: Vec::new(),
-            // input_bounds: None,
         }
     }
 
@@ -92,12 +90,6 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize>
         self.constraints.push(Box::new(constraint));
         self
     }
-
-    // TODO add this back and use it
-    // pub fn input_bounds(mut self, input_bounds: [(f64, f64); INPUT_SIZE]) -> Self {
-    //     self.input_bounds = Some(input_bounds);
-    //     self
-    // }
 
     pub fn build(self) -> Result<MPCProblem<STATE_SIZE, INPUT_SIZE>, String> {
         if self.state_cost.is_none() && self.terminal_cost.is_none() {

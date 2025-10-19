@@ -68,7 +68,6 @@ fn get_mpc_problem(
         .sample_period(Duration::from_secs_f64(DT))
         .setpoint(setpoint)
         .initial_conditions(initial_conditions)
-        // .input_bounds([(-1., 1.), (-1., 1.)])
         .build()
         .unwrap()
 }

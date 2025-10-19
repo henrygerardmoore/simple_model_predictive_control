@@ -62,7 +62,6 @@ mod simple_continuous_mpc {
             .sample_period(Duration::from_secs_f64(0.1))
             .setpoint(setpoint)
             .initial_conditions(initial_conditions)
-            // .input_bounds([(-1., 1.), (-1., 1.)])
             .build()
             .unwrap()
     }

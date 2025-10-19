@@ -109,15 +109,25 @@ fn dynamics_function(
     state
 }
 
+fn terminal_cost(state: &[f64; STATE_SIZE], setpoint: &[f64; STATE_SIZE]) -> f64 {
+    let weight: [f64; STATE_SIZE] = [1., 1., 1., 1.];
+    // for terminal cost, penalize velocity off setpoint too
+    (0..STATE_SIZE).fold(0., |acc, i| {
+        acc + weight[i] * (state[i] - setpoint[i]).powi(2)
+    })
+}
+
 fn state_cost(
     state: &[f64; STATE_SIZE],
     setpoint: &[f64; STATE_SIZE],
-    command: &ArrayView1<f64>,
+    _command: &ArrayView1<f64>,
 ) -> f64 {
-    // penalize not meeting the goal
-    2. * (state[0] - setpoint[0]).powi(2) + 3. * (state[2] - setpoint[2]).powi(2)
-    // and high control inputs
-    + 0.1 * command.dot(command)
+    let angle_tolerance = 0.1;
+    // penalize off-target x position
+    2. * (state[0] - setpoint[0]).powi(2)
+    // penalize off-target angle, but only if it's above a tolerable deviation so that the cart can move to the x target without cost
+    + 3. * ((state[2] - setpoint[2]).abs() - angle_tolerance).max(0.).powi(2)
+    // don't penalize commands in this case to prefer a better solution
 }
 
 fn get_mpc_problem(
@@ -127,11 +137,11 @@ fn get_mpc_problem(
     MPCControllerBuilder::<STATE_SIZE, INPUT_SIZE>::new()
         .dynamics_function(DynamicsFunction::Discrete(Box::new(&dynamics_function)))
         .state_cost(&state_cost)
+        .terminal_cost(&terminal_cost)
         .lookahead_duration(Duration::from_secs_f64(LOOKAHEAD))
         .sample_period(Duration::from_secs_f64(DT))
         .setpoint(setpoint)
         .initial_conditions(initial_conditions)
-        // .input_bounds([(-1., 1.), (-1., 1.)])
         .build()
         .unwrap()
 }

@@ -40,8 +40,6 @@ pub struct MPCProblem<const STATE_SIZE: usize, const INPUT_SIZE: usize> {
     // optional terminal cost function, J(x, x_setpoint) -> f64
     pub(crate) terminal_cost:
         Option<Box<dyn Fn(&[f64; STATE_SIZE], &[f64; STATE_SIZE]) -> f64 + Send + Sync>>,
-    // min and max value of each control input
-    // pub(crate) input_bounds: [(f64, f64); INPUT_SIZE],
 }
 
 impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> CostFunction
@@ -74,6 +72,7 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCProblem<STATE_SIZE, IN
     }
 
     // maps the inputs to the trajectory they would result in
+    // useful for visualization
     pub fn calculate_trajectory(&self, inputs: &ArrayView1<f64>) -> Array1<[f64; STATE_SIZE]> {
         let mut current_state = self.current_state;
         let input_chunks = Self::inputs_to_chunks(inputs);
@@ -108,6 +107,7 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCProblem<STATE_SIZE, IN
         unsafe { ArrayView2::from_shape_ptr((n_steps, INPUT_SIZE), inputs.as_ptr()) }
     }
 
+    // calculates the cost of a given trajectory
     pub(crate) fn calculate_trajectory_cost(
         &self,
         trajectory: &Array1<[f64; STATE_SIZE]>,
@@ -138,10 +138,13 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCProblem<STATE_SIZE, IN
                 .unwrap_or(0.)
     }
 
+    // set the duration over which the control problem will be optimized
     pub fn set_lookahead(&mut self, lookahead_duration: Duration) {
         self.lookahead_duration = lookahead_duration;
     }
 
+    // set the timestep of the controller
+    // the lookahead duration divided by the sample period (rounded up) gives the number of control inputs returned
     pub fn set_sample_period(&mut self, sample_period: Duration) {
         self.sample_period = sample_period;
     }
@@ -150,6 +153,7 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCProblem<STATE_SIZE, IN
         self.setpoint = setpoint;
     }
 
+    // this function provides a sample parameter vector for use with the Nelder Mead optimizer
     pub fn parameter_vector(&self) -> Vec<Array1<f64>> {
         // TODO add warm start
         let num_steps = (self.lookahead_duration.as_secs_f64() / self.sample_period.as_secs_f64())
