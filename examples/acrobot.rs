@@ -37,8 +37,8 @@ const LC2: f64 = L2 / 2.0;
 const M1: f64 = 0.25; // kg
 const M2: f64 = 0.25; // kg
 // moments of inertia of a rod about its end
-const I1: f64 = 1. / 12. * M1 * L1 * L1; // kg m^2
-const I2: f64 = 1. / 12. * M2 * L2 * L2; // kg m^2
+const I1: f64 = 1. / 3. * M1 * L1 * L1; // kg m^2
+const I2: f64 = 1. / 3. * M2 * L2 * L2; // kg m^2
 
 // get capital M (2x2) as a function of the state
 fn mass_matrix(state: &[f64; STATE_SIZE]) -> Array2<f64> {
@@ -205,7 +205,7 @@ fn trajectory_to_plot_format(trajectory: &mut Array1<[f64; 4]>) {
 
         // tip of second link
         let x2 = x1 + L2 * (state[0] + state[1]).sin();
-        let y2 = y1 + L2 * (state[0] + state[1]).sin();
+        let y2 = y1 - L2 * (state[0] + state[1]).cos();
 
         state[0] = x1;
         state[1] = y1;
