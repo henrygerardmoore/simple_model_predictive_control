@@ -65,8 +65,11 @@ mod simple_continuous_mpc {
 
     #[test]
     fn test_simple_continuous_mpc() {
+        let target_x: f64 = 1.;
+        let target_y: f64 = 2.;
+        let initial_distance = (target_x.powi(2) + target_y.powi(2)).sqrt();
         // try to move to 1, 2 with 0 velocity, starting at the origin
-        let mpc_problem = get_mpc_problem([0.; STATE_SIZE], [1., 0., 2., 0.]);
+        let mpc_problem = get_mpc_problem([0.; STATE_SIZE], [target_x, 0., target_y, 0.]);
 
         let solver = NelderMead::new(mpc_problem.parameter_vector());
 
@@ -84,7 +87,15 @@ mod simple_continuous_mpc {
 
         let trajectory = mpc_problem.calculate_trajectory(&res.state.best_param.unwrap().view());
 
-        print!("Trajectory: {:?}", trajectory);
+        let last_point = trajectory.last().unwrap();
+
+        // just check we got closer
+        // in reality it should be a lot closer than halfway there, but just getting to this point is most of the test
+        // check the simple_continuous example to see the actual output of this
+        assert!(
+            ((last_point[0] - target_x).powi(2) + (last_point[2] - target_y).powi(2)).sqrt()
+                < 0.5 * initial_distance
+        );
     }
 }
 
