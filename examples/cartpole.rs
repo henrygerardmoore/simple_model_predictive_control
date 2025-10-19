@@ -33,7 +33,7 @@ const GRAVITY: f64 = 9.80665; // m/s^2
 const CART_RAIL_BOUNDS: (f64, f64) = (-1., 1.); // (N, N)
 const INPUT_MAX: f64 = 200.; // N
 
-// dynamics for this example are from https://underactuated.mit.edu/acrobot.html
+// dynamics for this example are from https://underactuated.mit.edu/acrobot.html#cart_pole
 fn dynamics_function(
     state: &[f64; STATE_SIZE],
     input: &ArrayView1<f64>,
