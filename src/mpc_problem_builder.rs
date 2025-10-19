@@ -1,7 +1,8 @@
 use core::f64;
-use std::time::Duration;
+use std::{sync::Mutex, time::Duration};
 
 use ndarray::ArrayView1;
+use rand::rngs::ThreadRng;
 
 use crate::mpc_problem::{DynamicsFunction, MPCProblem};
 
@@ -105,6 +106,7 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCProblemBuilder<STATE_S
                 .ok_or("dynamics_function is required")?,
             state_cost: self.state_cost,
             terminal_cost: self.terminal_cost,
+            rng: Mutex::new(ThreadRng::default()),
         })
     }
 }

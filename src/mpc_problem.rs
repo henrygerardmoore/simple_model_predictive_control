@@ -1,12 +1,16 @@
 use core::f64;
-use std::time::Duration;
+use std::{sync::Mutex, time::Duration};
 
-use argmin::core::{CostFunction, Gradient};
+use argmin::{
+    core::{CostFunction, Gradient},
+    solver::simulatedannealing::Anneal,
+};
 use finitediff::ndarr;
 use ndarray::{
     Array, Array1, ArrayView1, ArrayView2,
     parallel::prelude::{IntoParallelRefIterator, ParallelIterator},
 };
+use rand::{Rng, distr::Uniform, rngs::ThreadRng};
 
 /// The dynamics function used by [MPCProblem]
 ///
@@ -59,6 +63,8 @@ pub struct MPCProblem<const STATE_SIZE: usize, const INPUT_SIZE: usize> {
     /// Optional terminal cost function, J(x, x_setpoint) -> f64
     pub(crate) terminal_cost:
         Option<Box<dyn Fn(&[f64; STATE_SIZE], &[f64; STATE_SIZE]) -> f64 + Send + Sync>>,
+
+    pub(crate) rng: Mutex<ThreadRng>,
 }
 
 /// Implement `argmin`'s `CostFunction` type.
@@ -114,6 +120,40 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> Gradient
             .par_iter()
             .map(|p| self.gradient(p.borrow()))
             .collect()
+    }
+}
+
+impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> Anneal
+    for MPCProblem<STATE_SIZE, INPUT_SIZE>
+{
+    type Param = Array1<f64>;
+
+    type Output = Array1<f64>;
+
+    type Float = f64;
+
+    fn anneal(
+        &self,
+        param: &Self::Param,
+        temp: Self::Float,
+    ) -> Result<Self::Output, argmin_math::Error> {
+        let mut param_n = param.clone();
+        let rng = &mut *self.rng.lock().unwrap();
+        let id_distr = Uniform::try_from(0..param.len())?;
+        let val_distr = Uniform::new_inclusive(-0.1, 0.1)?;
+        // Perform modifications to a degree proportional to the current temperature `temp`.
+        for _ in 0..(temp.floor() as u64 + 1) {
+            // Compute random index of the parameter vector using the supplied random number
+            // generator.
+            let idx = rng.sample(id_distr);
+
+            // Compute random number in [0.1, 0.1].
+            let val = rng.sample(val_distr);
+
+            // modify previous parameter value at random position `idx` by `val`
+            param_n[idx] += val;
+        }
+        Ok(param_n)
     }
 }
 
