@@ -4,5 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# this is our optimization library
+# another possibility is https://github.com/SimonBlanke/Gradient-Free-Optimizers
+# when autodiff is in rust it would be easy to use gradient-based optimizers with autodiff'd cost function
 egobox-ego = {version = "0.32.0", features = ["nlopt", "persistent"]}
 ndarray = {version = "0.15.6", features = ["rayon"]}
