@@ -4,10 +4,11 @@ use std::{
 };
 
 use argmin::{core::Executor, solver::neldermead::NelderMead};
-use ndarray::{Array1, ArrayView1};
+use ndarray::{Array1, Array2, ArrayView1, array};
 
 use mpc_rs::prelude::*;
-use plotters::{prelude::*, style::full_palette::GREY};
+use ndarray_linalg::Solve;
+use plotters::prelude::*;
 
 // link 1 angle CCW from down (rad), link 2 angle of deflection CCW *from link 1* (rad), link 1 angular velocity (rad/2), link 2 angular velocity (rad/s)
 const STATE_SIZE: usize = 4;
@@ -26,9 +27,53 @@ const GOAL: [f64; 4] = [PI, 0., 0., 0.];
 
 // acrobot parameters
 const INPUT_MAX: f64 = 200.; // N*m
+const GRAVITY: f64 = 9.80665; // m/s^2
+const L1: f64 = 0.5; // m
+const L2: f64 = 0.5; // m
+const M1: f64 = 0.25; // kg
+const M2: f64 = 0.25; // kg
+// moments of inertia of a rod about its end
+const I1: f64 = 1. / 12. * M1 * L1 * L1; // kg m^2
+const I2: f64 = 1. / 12. * M2 * L2 * L2; // kg m^2
 
-// dynamics for this example are from https://underactuated.mit.edu/acrobot.html
-// converted into our form using https://underactuated.mit.edu/multibody.html
+// get capital M (2x2) as a function of the state
+fn mass_matrix(state: &[f64; STATE_SIZE]) -> Array2<f64> {
+    let theta2 = state[1];
+    array![
+        [
+            I1 + I2 + M2 * L1.powi(2) + 2. * M2 * L2 * theta2.cos(),
+            I2 + M2 * L1 * L2 * theta2.cos()
+        ],
+        [I2 + M2 * L1 * L2 * theta2.cos(), I2]
+    ]
+}
+
+// get capital C (2x2) as a function of the state
+fn damping_matrix(state: &[f64; STATE_SIZE]) -> Array2<f64> {
+    let theta2 = state[1];
+    let omega1 = state[2];
+    let omega2 = state[3];
+    array![
+        [
+            -2. * M2 * L1 * L2 * theta2.sin() * omega2,
+            -M2 * L1 * L2 * theta2.sin() * omega2
+        ],
+        [M2 * L1 * L2 * theta2.sin() * omega1, 0.]
+    ]
+}
+
+// get the torque due to gravity, tau (2x1), as a function of the state
+fn gravity_torque_matrix(state: &[f64; STATE_SIZE]) -> Array2<f64> {
+    let theta1 = state[0];
+    let theta2 = state[1];
+    array![
+        [-M1 * GRAVITY * L1 * theta1.sin()
+            - M2 * GRAVITY * (L1 * theta1.sin() + L2 * (theta1 + theta2).sin())],
+        [-M2 * GRAVITY * L2 * (theta1 + theta2).sin()]
+    ]
+}
+
+// dynamics for this example are from https://underactuated.mit.edu/acrobot.html#section1
 fn dynamics_function(
     state: &[f64; STATE_SIZE],
     input: &ArrayView1<f64>,
@@ -44,15 +89,35 @@ fn dynamics_function(
     let dt = dt / (n_euler_steps as f64);
     let mut state = state.clone();
 
+    // input mapping matrix
+    let b = array![[0.], [1.]];
+
     // fine euler integration
     for _ in 0..n_euler_steps {
-        todo!()
+        let m = mass_matrix(&state);
+        let c = damping_matrix(&state);
+        let tau = gravity_torque_matrix(&state);
+        let first_deriv = array![[state[2]], [state[3]]];
+
+        // right-hand side of M * second_derivative equation (2x1)
+        let rhs = tau + b.clone() * fx - c * first_deriv;
+
+        let second_derivative = m.solve_into(rhs.column(0).to_owned()).unwrap();
+
+        state[0] = (state[0] + dt * state[2]).rem_euclid(TAU);
+        state[1] = (state[1] + dt * state[3]).rem_euclid(TAU);
+        state[2] += dt * second_derivative[0];
+        state[3] += dt * second_derivative[1];
     }
     state
 }
 
 fn terminal_cost(state: &[f64; STATE_SIZE], setpoint: &[f64; STATE_SIZE]) -> f64 {
-    todo!()
+    // penalize off-target angle and nonzero velocity
+    let weight: [f64; STATE_SIZE] = [1., 1., 1., 1.];
+    (0..STATE_SIZE).fold(0., |acc, i| {
+        acc + weight[i] * (state[i] - setpoint[i]).powi(2)
+    })
 }
 
 fn state_cost(
@@ -60,7 +125,8 @@ fn state_cost(
     setpoint: &[f64; STATE_SIZE],
     _command: &ArrayView1<f64>,
 ) -> f64 {
-    todo!()
+    // penalize off-target angle for both links
+    (state[0] - setpoint[0]).powi(2) + (state[2] - setpoint[2]).powi(2)
 }
 
 fn get_mpc_problem(
@@ -100,7 +166,18 @@ fn plot(trajectory: Array1<[f64; STATE_SIZE]>) -> Result<(), Box<dyn std::error:
             .build_cartesian_2d(-1.0 * aspect_ratio..1.0 * aspect_ratio, -0.75..0.75)?;
 
         // draw both links as lines
-        todo!();
+
+        // draw first link as thick red
+        chart.draw_series(LineSeries::new(
+            std::iter::once((0., 0.)).chain(std::iter::once((point[0], point[1]))),
+            RED.filled().stroke_width(5),
+        ))?;
+
+        // draw second link as thinner blue
+        chart.draw_series(LineSeries::new(
+            std::iter::once((point[0], point[1])).chain(std::iter::once((point[2], point[3]))),
+            BLUE.filled().stroke_width(3),
+        ))?;
 
         root.present()?;
     }
@@ -117,7 +194,20 @@ fn plot(trajectory: Array1<[f64; STATE_SIZE]>) -> Result<(), Box<dyn std::error:
 
 // change the trajectory from (theta1, theta2, omega1, omega2) to (x_end1, y_end1, x_end2, y_end2)
 fn trajectory_to_plot_format(trajectory: &mut Array1<[f64; 4]>) {
-    trajectory.iter_mut().for_each(|state| todo!());
+    trajectory.iter_mut().for_each(|state| {
+        // tip of first link
+        let x1 = L1 * state[0].sin();
+        let y1 = -L1 * state[0].cos();
+
+        // tip of second link
+        let x2 = x1 + L2 * (state[0] + state[1]).sin();
+        let y2 = y1 + L2 * (state[0] + state[1]).sin();
+
+        state[0] = x1;
+        state[1] = y1;
+        state[2] = x2;
+        state[3] = y2;
+    });
 }
 
 #[cfg(debug_assertions)]
