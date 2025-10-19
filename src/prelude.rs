@@ -1,3 +1,3 @@
-pub use crate::mpc_controller::DynamicsFunction;
-pub use crate::mpc_controller::MPCProblem;
-pub use crate::mpc_controller_builder::MPCControllerBuilder;
+pub use crate::mpc_problem::DynamicsFunction;
+pub use crate::mpc_problem::MPCProblem;
+pub use crate::mpc_problem_builder::MPCProblemBuilder;

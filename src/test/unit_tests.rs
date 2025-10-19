@@ -1,7 +1,7 @@
 mod unit_tests {
     use ndarray::Array;
 
-    use crate::mpc_controller::MPCProblem;
+    use crate::mpc_problem::MPCProblem;
 
     #[test]
     fn test_input_to_chunks() {

@@ -8,8 +8,7 @@ mod simple_continuous_mpc {
     use ndarray::ArrayView1;
 
     use crate::{
-        mpc_controller::DynamicsFunction, mpc_controller_builder::MPCControllerBuilder,
-        prelude::MPCProblem,
+        mpc_problem::DynamicsFunction, mpc_problem_builder::MPCProblemBuilder, prelude::MPCProblem,
     };
 
     // x, x velocity, y, y velocity
@@ -54,7 +53,7 @@ mod simple_continuous_mpc {
         initial_conditions: [f64; STATE_SIZE],
         setpoint: [f64; STATE_SIZE],
     ) -> MPCProblem<STATE_SIZE, INPUT_SIZE> {
-        MPCControllerBuilder::<STATE_SIZE, INPUT_SIZE>::new()
+        MPCProblemBuilder::<STATE_SIZE, INPUT_SIZE>::new()
             .dynamics_function(DynamicsFunction::Continuous(Box::new(&dynamics_function)))
             .terminal_cost(&distance_cost)
             .state_cost(&state_cost)

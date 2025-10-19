@@ -60,7 +60,7 @@ fn get_mpc_problem(
     initial_conditions: [f64; STATE_SIZE],
     setpoint: [f64; STATE_SIZE],
 ) -> MPCProblem<STATE_SIZE, INPUT_SIZE> {
-    MPCControllerBuilder::<STATE_SIZE, INPUT_SIZE>::new()
+    MPCProblemBuilder::<STATE_SIZE, INPUT_SIZE>::new()
         .dynamics_function(DynamicsFunction::Continuous(Box::new(&dynamics_function)))
         .terminal_cost(&distance_cost)
         .state_cost(&state_cost)

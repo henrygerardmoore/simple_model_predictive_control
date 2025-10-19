@@ -3,11 +3,11 @@ use std::time::Duration;
 
 use ndarray::ArrayView1;
 
-use crate::mpc_controller::{DynamicsFunction, MPCProblem};
+use crate::mpc_problem::{DynamicsFunction, MPCProblem};
 
 #[allow(clippy::type_complexity)]
 #[derive(Default)]
-pub struct MPCControllerBuilder<const STATE_SIZE: usize, const INPUT_SIZE: usize> {
+pub struct MPCProblemBuilder<const STATE_SIZE: usize, const INPUT_SIZE: usize> {
     setpoint: Option<[f64; STATE_SIZE]>,
     current_state: Option<[f64; STATE_SIZE]>,
     sample_period: Option<Duration>,
@@ -20,9 +20,7 @@ pub struct MPCControllerBuilder<const STATE_SIZE: usize, const INPUT_SIZE: usize
     constraints: Vec<Box<dyn Fn(&[f64; STATE_SIZE]) -> f64 + Send + Sync>>,
 }
 
-impl<const STATE_SIZE: usize, const INPUT_SIZE: usize>
-    MPCControllerBuilder<STATE_SIZE, INPUT_SIZE>
-{
+impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCProblemBuilder<STATE_SIZE, INPUT_SIZE> {
     pub fn new() -> Self {
         Self {
             setpoint: None,
