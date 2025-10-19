@@ -5,7 +5,13 @@ use std::{
 
 use argmin::{
     core::Executor,
-    solver::{particleswarm::ParticleSwarm, simulatedannealing::SimulatedAnnealing},
+    solver::{
+        linesearch::HagerZhangLineSearch,
+        neldermead::NelderMead,
+        particleswarm::{Particle, ParticleSwarm},
+        quasinewton::LBFGS,
+        simulatedannealing::SimulatedAnnealing,
+    },
 };
 use ndarray::{Array1, Array2, ArrayView1, array, s};
 
@@ -23,7 +29,7 @@ const INPUT_SIZE: usize = 1;
 const DT: f64 = 0.05; // (s)
 
 // lookahead time (s)
-const LOOKAHEAD: f64 = 2.0;
+const LOOKAHEAD: f64 = 5.0;
 
 // start pointing straight down
 const INITIAL_STATE: [f64; 4] = [-PI / 2., 0., 0., 0.];
@@ -301,32 +307,61 @@ pub fn main() {
 
     let min = Array1::ones(n * INPUT_SIZE) * -INPUT_MAX;
     let max = Array1::ones(n * INPUT_SIZE) * INPUT_MAX;
+    let linesearch = HagerZhangLineSearch::new();
 
     for index in 0..num_chunks {
         let mpc_problem = get_mpc_problem(state, GOAL);
 
-        let pso_warmstart_solver = ParticleSwarm::new((min.clone(), max.clone()), 1000);
-        let res = Executor::new(mpc_problem, pso_warmstart_solver)
-            .configure(|state| state.max_iters(100))
+        let pso_warmstart_solver = ParticleSwarm::new((min.clone(), max.clone()), 10000);
+        let pso_res = Executor::new(mpc_problem, pso_warmstart_solver)
+            .configure(|state| state.max_iters(10))
             .run()
             .unwrap();
 
-        // now use the best particle as a warmstart
-        let best_result = res.state.best_individual.unwrap().position;
+        // use the best particle and n others for the nelder-mead simplex
+        let mpc_problem = get_mpc_problem(state, GOAL);
+
+        // sort them lowest to highest
+        let mut sorted_particles = pso_res
+            .state
+            .get_population()
+            .unwrap()
+            .iter()
+            .collect::<Vec<&Particle<Array1<f64>, f64>>>();
+        sorted_particles.sort_by(|&particle1, particle2| particle1.cost.total_cmp(&particle2.cost));
+
+        // take the n+1 lowest-cost particles and use them as the simplex
+        let parameters: Vec<Array1<f64>> = sorted_particles
+            .iter()
+            .take(n + 1)
+            .map(|particle| particle.position.clone())
+            .collect();
+
+        let nm_solver = NelderMead::new(parameters);
+        let nm_res = Executor::new(mpc_problem, nm_solver)
+            .configure(|state| state.max_iters(10000))
+            .run()
+            .unwrap();
+
+        let best_result = nm_res.state.best_param.unwrap();
 
         let mpc_problem = get_mpc_problem(state, GOAL);
 
-        let solver = SimulatedAnnealing::new(30.).unwrap();
+        let annealing_solver = SimulatedAnnealing::new(30.).unwrap();
         // Run solver
-        // plotting is actually the slowest part when in debug mode, but solving is also much slower of course
-        #[cfg(debug_assertions)]
-        let res = Executor::new(mpc_problem, solver)
+        let annealing_res = Executor::new(mpc_problem, annealing_solver)
             .configure(|state| state.param(best_result).max_iters(1000))
             .run()
             .unwrap();
-        #[cfg(not(debug_assertions))]
-        let res = Executor::new(mpc_problem, solver)
-            .configure(|state| state.param(best_result).max_iters(10000))
+
+        let best_result = annealing_res.state.best_param.unwrap();
+
+        let mpc_problem = get_mpc_problem(state, GOAL);
+
+        let lbfgs_solver = LBFGS::new(linesearch.clone(), 7);
+        // Run solver
+        let lbfgs_res = Executor::new(mpc_problem, lbfgs_solver)
+            .configure(|state| state.param(best_result).max_iters(1000))
             .run()
             .unwrap();
 
@@ -334,7 +369,7 @@ pub fn main() {
 
         // update start position and append to overall trajectory
         // only use first half of inputs
-        let inputs = res.state.best_param.unwrap();
+        let inputs = lbfgs_res.state.best_param.unwrap();
         let this_trajectory = mpc_problem.calculate_trajectory(&inputs.slice(s![..n_half]));
         trajectory
             .append(ndarray::Axis(0), this_trajectory.view())
