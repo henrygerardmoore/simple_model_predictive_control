@@ -1,51 +1,59 @@
+use core::f64;
 use std::{
     iter::{once, repeat_n},
     time::Duration,
 };
 
 use egobox_ego::{
-    CorrelationSpec, Cstr, EgorBuilder, EgorState, GroupFunc, InfillOptimizer, InfillStrategy,
+    CorrelationSpec, EgorBuilder, EgorState, GroupFunc, InfillOptimizer, InfillStrategy,
     RegressionSpec,
 };
-use ndarray::{Array, Array2, ArrayView2, Ix1, Zip, array};
-
-pub type DynamicsFn<const STATE_SIZE: usize, const INPUT_SIZE: usize> =
-    Box<dyn Fn(&[f64; STATE_SIZE], &[f64; INPUT_SIZE]) -> [f64; STATE_SIZE] + Send>;
+use ndarray::{Array, Array1, Array2, ArrayView1, ArrayView2, Ix1, Zip};
 
 // the MPCController can take a function that returns the derivative and integrate it internally as needed
 // or a function that takes a state and a dt and returns the next state
 // if you want fine control of the integration or have dynamics that cannot be captured by a derivative, then you should use Discrete
+#[allow(clippy::type_complexity)]
 pub enum DynamicsFunction<const STATE_SIZE: usize, const INPUT_SIZE: usize> {
     // f(x, u) -> xdot
-    Continuous(DynamicsFn<STATE_SIZE, INPUT_SIZE>),
-    // f(x_k, u_k) -> x_{k+1}
-    Discrete(DynamicsFn<STATE_SIZE, INPUT_SIZE>),
+    Continuous(
+        Box<dyn Fn(&[f64; STATE_SIZE], &[f64; INPUT_SIZE]) -> [f64; STATE_SIZE] + Send + Sync>,
+    ),
+    // f(x_k, u_k, dt) -> x_{k+1}
+    Discrete(
+        Box<
+            dyn Fn(&[f64; STATE_SIZE], &[f64; INPUT_SIZE], Duration) -> [f64; STATE_SIZE]
+                + Send
+                + Sync,
+        >,
+    ),
 }
 
-// WIP
-#[allow(dead_code, clippy::type_complexity)]
+#[allow(clippy::type_complexity)]
 pub struct MPCController<const STATE_SIZE: usize, const INPUT_SIZE: usize> {
-    setpoint: [f64; STATE_SIZE],
+    // WIP refactor terminal_cost function to take setpoint, too
+    _setpoint: [f64; STATE_SIZE],
+    current_state: [f64; STATE_SIZE],
     sample_period: Duration,
     lookahead_duration: Duration,
     dynamics_function: DynamicsFunction<STATE_SIZE, INPUT_SIZE>,
 
     // MPC controller must have at least one of the below cost functions
-    // optional state cost function, J(x, u) -> f64
-    state_cost: Option<Box<dyn Fn(&[f64; STATE_SIZE], &[f64; INPUT_SIZE]) -> f64 + Send>>,
+    // optional state/input cost function, J(x, u) -> f64
+    state_cost: Option<Box<dyn Fn(&[f64; STATE_SIZE], &[f64; INPUT_SIZE]) -> f64 + Send + Sync>>,
 
     // optional terminal cost function, J(x) -> f64
-    terminal_cost: Option<Box<dyn Fn(&[f64; STATE_SIZE]) -> f64 + Send>>,
+    terminal_cost: Option<Box<dyn Fn(&[f64; STATE_SIZE]) -> f64 + Send + Sync>>,
 
     // can be an empty vector if this is an unconstrained problem
-    // WIP: use this
-    constraints: Vec<Cstr>,
+    // C(trajectory) -> c, where c is negative if the constraint is violated
+    constraints: Vec<Box<dyn Fn(&[f64; STATE_SIZE]) -> f64 + Send + Sync>>,
 
     // min and max value of each control input
     input_bounds: [(f64, f64); INPUT_SIZE],
 }
 
-// WIP
+// will only be read by users and in tests
 #[allow(dead_code)]
 pub struct MPCOutput {
     control_inputs: Array<f64, Ix1>,
@@ -108,14 +116,105 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCController<STATE_SIZE,
     }
 
     fn cost_function(&self) -> impl GroupFunc {
-        // fn cost(&self, x: &ArrayView2<f64>) -> Array2<f64> {
         |x: &ArrayView2<f64>| -> Array2<f64> {
             let mut y: Array2<f64> = Array2::zeros((x.nrows(), 1));
             Zip::from(y.rows_mut())
                 .and(x.rows())
-                .par_for_each(|mut yi, xi| yi.assign(&array![xi.sum()]));
+                .par_for_each(|mut yi, xi| {
+                    let trajectory = self.calculate_trajectory(&xi);
+                    let trajectory_cost = self.calculate_trajectory_cost(&trajectory, &xi);
+                    let constraints = self.calculate_trajectory_constraints(&trajectory);
+                    let cost_iter = std::iter::once(trajectory_cost).chain(constraints);
+                    let output = Array::from_iter(cost_iter);
+                    yi.assign(&output)
+                });
             y
         }
+    }
+
+    fn integrate_dynamics(
+        &self,
+        current_state: &[f64; STATE_SIZE],
+        derivatives: &[f64; STATE_SIZE],
+    ) -> [f64; STATE_SIZE] {
+        // just do a simple Euler integration for now
+        let mut next_state = [0_f64; STATE_SIZE];
+        for i in 0..STATE_SIZE {
+            next_state[i] = current_state[i] + self.sample_period.as_secs_f64() * derivatives[i];
+        }
+        next_state
+    }
+
+    // maps the inputs to the trajectory they would result in
+    fn calculate_trajectory(&self, inputs: &ArrayView1<f64>) -> Array1<[f64; STATE_SIZE]> {
+        let mut current_state = self.current_state;
+        let trajectory_iter = Self::inputs_to_chunks(inputs).map(|input| {
+            let next_state = match &self.dynamics_function {
+                DynamicsFunction::Continuous(continuous_dynamics_function) => {
+                    let derivatives = continuous_dynamics_function(&current_state, input);
+                    self.integrate_dynamics(&current_state, &derivatives)
+                }
+                DynamicsFunction::Discrete(discrete_dynamics_function) => {
+                    discrete_dynamics_function(&current_state, input, self.sample_period)
+                }
+            };
+            current_state = next_state;
+            current_state
+        });
+
+        Array::from_iter(trajectory_iter)
+    }
+
+    fn inputs_to_chunks<'a>(
+        inputs: &'a ArrayView1<f64>,
+    ) -> impl Iterator<Item = &'a [f64; INPUT_SIZE]> {
+        inputs
+            .as_slice()
+            .unwrap()
+            .chunks_exact(INPUT_SIZE)
+            .map(|chunk| TryInto::<&[f64; INPUT_SIZE]>::try_into(chunk).unwrap())
+    }
+
+    fn calculate_trajectory_cost(
+        &self,
+        trajectory: &Array1<[f64; STATE_SIZE]>,
+        inputs: &ArrayView1<f64>,
+    ) -> f64 {
+        let state_cost = if let Some(state_cost_function) = &self.state_cost {
+            trajectory.iter().zip(Self::inputs_to_chunks(inputs)).fold(
+                0.,
+                |accumulated_cost, (state, input)| {
+                    accumulated_cost + state_cost_function(state, input)
+                },
+            )
+        } else {
+            0.
+        };
+        // terminal cost
+        state_cost
+            + trajectory
+                .last()
+                .map(|terminal_state| {
+                    if let Some(terminal_cost_function) = &self.terminal_cost {
+                        terminal_cost_function(terminal_state)
+                    } else {
+                        0.
+                    }
+                })
+                .unwrap_or(0.)
+    }
+
+    fn calculate_trajectory_constraints(
+        &self,
+        trajectory: &Array1<[f64; STATE_SIZE]>,
+    ) -> impl Iterator<Item = f64> {
+        self.constraints.iter().map(|constraint_function| {
+            // map each constraint to the minimum value they take on during the trajectory
+            trajectory
+                .iter()
+                .map(constraint_function)
+                .fold(f64::INFINITY, |acc, x| acc.min(x))
+        })
     }
 
     pub fn set_lookahead(&mut self, lookahead_duration: Duration) {
@@ -126,3 +225,5 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCController<STATE_SIZE,
         self.sample_period = sample_period;
     }
 }
+
+// WIP add unit tests
