@@ -74,7 +74,7 @@ mod simple_continuous_mpc {
         // try to move to 1, 2 with 0 velocity, starting at the origin
         let mpc_problem = get_mpc_problem([0.; STATE_SIZE], [target_x, 0., target_y, 0.]);
 
-        let solver = NelderMead::new(mpc_problem.parameter_vector());
+        let solver = NelderMead::new(mpc_problem.parameter_vector(1.));
 
         // Run solver
         let res = Executor::new(mpc_problem, solver)

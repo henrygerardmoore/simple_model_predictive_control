@@ -20,7 +20,7 @@ const INPUT_SIZE: usize = 1;
 const DT: f64 = 0.05; // (s)
 
 // lookahead time (s)
-const LOOKAHEAD: f64 = 5.0;
+const LOOKAHEAD: f64 = 5.;
 
 // start pointing straight down
 const INITIAL_STATE: [f64; 4] = [-PI / 2., 0., 0., 0.];
@@ -28,7 +28,7 @@ const INITIAL_STATE: [f64; 4] = [-PI / 2., 0., 0., 0.];
 const GOAL: [f64; 4] = [PI / 2., 0., 0., 0.];
 
 // acrobot parameters
-const INPUT_MAX: f64 = 100.; // N*m
+const INPUT_MAX: f64 = 50.; // N*m
 const GRAVITY: f64 = -9.80665; // m/s^2
 const L1: f64 = 2.0; // m
 // length to center of 1
@@ -98,7 +98,7 @@ fn state_derivative(state: &[f64; STATE_SIZE], input: &ArrayView1<f64>) -> [f64;
 
     let second_derivative = m.solve_into(rhs.column(0).to_owned()).unwrap();
 
-    let friction_coeff = 0.2;
+    let friction_coeff = 0.5;
 
     [
         state[2],
@@ -159,34 +159,66 @@ fn dynamics_function(
     state
 }
 
-fn terminal_cost(state: &[f64; STATE_SIZE], setpoint: &[f64; STATE_SIZE]) -> f64 {
-    // penalize off-target angle or velocity
-    let weight: [f64; STATE_SIZE] = [1., 1., 1., 1.];
-    (0..STATE_SIZE).fold(0., |acc, i| {
-        acc + weight[i] * (state[i] - setpoint[i]).powi(2)
-    })
+fn terminal_cost(state: &[f64; STATE_SIZE], _setpoint: &[f64; STATE_SIZE]) -> f64 {
+    let theta1 = state[0];
+    let theta2 = state[1];
+    let omega1 = state[2];
+    let omega2 = state[3];
+    let g = -GRAVITY;
+    // purely potential energy
+    let target_energy = LC1 * M1 * g + (L1 + LC2) * M2 * g;
+
+    let yc1 = LC1 * theta1.sin();
+    let yc2 = L1 * theta1.sin() + LC2 * (theta1 + theta2).sin();
+
+    let potential_energy =
+    // potential
+    yc1 * M1 * g + yc2 * M2 * g;
+
+    let kinetic_energy =
+    // kinetic for link 1
+    0.5 * I1 * omega1.powi(2)
+    // kinetic for link 2
+    + 0.5 * (M2 * L1.powi(2) + I2 + 2. * M2 * L1 * LC2 * theta2.cos()) * omega1.powi(2)
+    + 0.5 * I2 * omega2.powi(2) + (I2 + M2 * L1 * LC2 * theta2.cos()) * omega1 * omega2;
+
+    // let angle_tolerance = 0.1;
+
+    // penalize energy deviating from target
+    (potential_energy - target_energy).abs() + kinetic_energy
 }
 
 fn state_cost(
     state: &[f64; STATE_SIZE],
-    setpoint: &[f64; STATE_SIZE],
+    _setpoint: &[f64; STATE_SIZE],
     _command: &ArrayView1<f64>,
 ) -> f64 {
-    // let the first link deviate a bit without penalty
-    let angle_tolerance = 0.0;
-    // penalize off-target angle for first link
-    5. * (angle_difference(state[0], setpoint[0]) - angle_tolerance).max(0.).powi(2)
-    // smaller penalty for second link
-    + angle_difference(state[1], setpoint[1]).powi(2)
-}
+    let theta1 = state[0];
+    let theta2 = state[1];
+    let omega1 = state[2];
+    let omega2 = state[3];
+    let g = -GRAVITY;
+    // purely potential energy
+    let target_energy = LC1 * M1 * g + (L1 + LC2) * M2 * g;
 
-fn angle_difference(theta_1: f64, theta_2: f64) -> f64 {
-    let diff_naive = (theta_1 - theta_2).abs();
-    if diff_naive > PI {
-        TAU - diff_naive
-    } else {
-        diff_naive
-    }
+    let yc1 = LC1 * theta1.sin();
+    let yc2 = L1 * theta1.sin() + LC2 * (theta1 + theta2).sin();
+
+    let potential_energy =
+    // potential
+    yc1 * M1 * g + yc2 * M2 * g;
+
+    let kinetic_energy =
+    // kinetic for link 1
+    0.5 * I1 * omega1.powi(2)
+    // kinetic for link 2
+    + 0.5 * (M2 * L1.powi(2) + I2 + 2. * M2 * L1 * LC2 * theta2.cos()) * omega1.powi(2)
+    + 0.5 * I2 * omega2.powi(2) + (I2 + M2 * L1 * LC2 * theta2.cos()) * omega1 * omega2;
+
+    // let angle_tolerance = 0.1;
+
+    // penalize energy deviating from target
+    (potential_energy - target_energy).abs() + 0.025 * kinetic_energy
 }
 
 fn get_mpc_problem(
@@ -293,7 +325,7 @@ pub fn main() {
     for _ in 0..num_chunks {
         let mpc_problem = get_mpc_problem(state, GOAL);
 
-        let solver = NelderMead::new(mpc_problem.parameter_vector());
+        let solver = NelderMead::new(mpc_problem.parameter_vector(INPUT_MAX));
         // Run solver
         // plotting is actually the slowest part when in debug mode, but solving is also much slower of course
         #[cfg(debug_assertions)]

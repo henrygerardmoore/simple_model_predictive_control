@@ -243,7 +243,7 @@ pub fn main() {
     for _ in 0..num_chunks {
         let mpc_problem = get_mpc_problem(initial_state, GOAL);
 
-        let solver = NelderMead::new(mpc_problem.parameter_vector());
+        let solver = NelderMead::new(mpc_problem.parameter_vector(1.));
         // Run solver
         // plotting is actually the slowest part when in debug mode, but solving is also much slower of course
         #[cfg(debug_assertions)]

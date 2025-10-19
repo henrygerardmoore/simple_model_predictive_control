@@ -154,7 +154,7 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCProblem<STATE_SIZE, IN
     }
 
     // this function provides a sample parameter vector for use with the Nelder Mead optimizer
-    pub fn parameter_vector(&self) -> Vec<Array1<f64>> {
+    pub fn parameter_vector(&self, max_input: f64) -> Vec<Array1<f64>> {
         // TODO add warm start
         let num_steps = (self.lookahead_duration.as_secs_f64() / self.sample_period.as_secs_f64())
             .ceil() as usize;
@@ -167,7 +167,7 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCProblem<STATE_SIZE, IN
         // have each simplex vector simply be a unit in a given direction
         for i in 0..dimension {
             let mut next_vec = zero_vec.clone();
-            next_vec[i] = 1.;
+            next_vec[i] = max_input;
             simplex.push(next_vec);
         }
         simplex
