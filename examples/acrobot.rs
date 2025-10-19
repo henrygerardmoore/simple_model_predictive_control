@@ -294,7 +294,8 @@ pub fn main() {
     let mut state = INITIAL_STATE;
 
     // how many lookahead periods we should do
-    let num_chunks = 8;
+    let target_time = 25.;
+    let num_chunks = (target_time / LOOKAHEAD).ceil() as usize;
     let n = (LOOKAHEAD / DT).ceil() as usize;
     let n_half = (LOOKAHEAD / 2. / DT).ceil() as usize;
     let mut init_param = Array1::zeros(n * INPUT_SIZE);
@@ -304,7 +305,7 @@ pub fn main() {
 
     let linesearch = MoreThuenteLineSearch::new().with_c(1e-4, 0.9).unwrap();
 
-    for _ in 0..num_chunks {
+    for index in 0..num_chunks {
         let mpc_problem = get_mpc_problem(state, GOAL);
 
         let solver = LBFGS::new(linesearch.clone(), 7);
@@ -331,6 +332,7 @@ pub fn main() {
             .append(ndarray::Axis(0), this_trajectory.view())
             .unwrap();
         state = *this_trajectory.last().unwrap();
+        println!("Chunk {}/{} complete", index + 1, num_chunks);
     }
 
     trajectory_to_plot_format(&mut trajectory);
