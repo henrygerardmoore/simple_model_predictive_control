@@ -8,6 +8,7 @@ use ndarray::{
 };
 
 /// The dynamics function used by [MPCProblem]
+///
 /// The [MPCProblem] takes either:
 /// - a function that returns the derivative and integrates it internally as needed
 ///
@@ -78,6 +79,7 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> CostFunction
     }
 
     /// Only particle swarm optimization in argmin currently supports this.
+    /// See the [argmin book page on parallel evaluation](https://www.argmin-rs.org/book/defining_optimization_problem.html?highlight=rayon#parallel-evaluation-with-bulk_-methods).
     fn bulk_cost<P>(&self, params: &[P]) -> Result<Vec<Self::Output>, argmin_math::Error>
     where
         P: std::borrow::Borrow<Self::Param> + argmin::core::SyncAlias,
