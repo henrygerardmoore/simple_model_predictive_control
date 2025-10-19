@@ -1,7 +1,9 @@
 use core::f64;
 use std::time::Duration;
 
-use crate::mpc_controller::{DynamicsFunction, MPCController};
+use ndarray::ArrayView1;
+
+use crate::mpc_controller::{DynamicsFunction, MPCProblem};
 
 #[allow(clippy::type_complexity)]
 #[derive(Default)]
@@ -11,10 +13,10 @@ pub struct MPCControllerBuilder<const STATE_SIZE: usize, const INPUT_SIZE: usize
     sample_period: Option<Duration>,
     lookahead_duration: Option<Duration>,
     dynamics_function: Option<DynamicsFunction<STATE_SIZE, INPUT_SIZE>>,
-    state_cost: Option<Box<dyn Fn(&[f64; STATE_SIZE], &[f64; INPUT_SIZE]) -> f64 + Send + Sync>>,
+    state_cost: Option<Box<dyn Fn(&[f64; STATE_SIZE], &ArrayView1<f64>) -> f64 + Send + Sync>>,
     terminal_cost: Option<Box<dyn Fn(&[f64; STATE_SIZE], &[f64; STATE_SIZE]) -> f64 + Send + Sync>>,
     constraints: Vec<Box<dyn Fn(&[f64; STATE_SIZE]) -> f64 + Send + Sync>>,
-    input_bounds: Option<[(f64, f64); INPUT_SIZE]>,
+    // input_bounds: Option<[(f64, f64); INPUT_SIZE]>,
 }
 
 impl<const STATE_SIZE: usize, const INPUT_SIZE: usize>
@@ -30,7 +32,7 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize>
             state_cost: None,
             terminal_cost: None,
             constraints: Vec::new(),
-            input_bounds: None,
+            // input_bounds: None,
         }
     }
 
@@ -64,7 +66,7 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize>
 
     pub fn state_cost<F>(mut self, state_cost: F) -> Self
     where
-        F: Fn(&[f64; STATE_SIZE], &[f64; INPUT_SIZE]) -> f64 + Send + Sync + 'static,
+        F: Fn(&[f64; STATE_SIZE], &ArrayView1<f64>) -> f64 + Send + Sync + 'static,
     {
         self.state_cost = Some(Box::new(state_cost));
         self
@@ -86,16 +88,17 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize>
         self
     }
 
-    pub fn input_bounds(mut self, input_bounds: [(f64, f64); INPUT_SIZE]) -> Self {
-        self.input_bounds = Some(input_bounds);
-        self
-    }
+    // TODO add this back and use it
+    // pub fn input_bounds(mut self, input_bounds: [(f64, f64); INPUT_SIZE]) -> Self {
+    //     self.input_bounds = Some(input_bounds);
+    //     self
+    // }
 
-    pub fn build(self) -> Result<MPCController<STATE_SIZE, INPUT_SIZE>, String> {
+    pub fn build(self) -> Result<MPCProblem<STATE_SIZE, INPUT_SIZE>, String> {
         if self.state_cost.is_none() && self.terminal_cost.is_none() {
             return Err("at least one of state_cost or terminal_cost must be provided".to_string());
         }
-        Ok(MPCController {
+        Ok(MPCProblem {
             setpoint: self.setpoint.ok_or("setpoint is required")?,
             current_state: self.current_state.ok_or("current_state is required")?,
             sample_period: self.sample_period.ok_or("sample_period is required")?,
@@ -107,10 +110,6 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize>
                 .ok_or("dynamics_function is required")?,
             state_cost: self.state_cost,
             terminal_cost: self.terminal_cost,
-            constraints: self.constraints,
-            input_bounds: self
-                .input_bounds
-                .unwrap_or([(-f64::INFINITY, f64::INFINITY); INPUT_SIZE]),
         })
     }
 }
