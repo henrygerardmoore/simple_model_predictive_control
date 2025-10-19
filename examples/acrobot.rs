@@ -82,13 +82,6 @@ fn gravity_torque_matrix(state: &[f64; STATE_SIZE]) -> Array2<f64> {
     ]
 }
 
-// use analytic 2x2 inverse
-fn qdd_from_m_rhs(m: &Array2<f64>, rhs: &Array1<f64>) -> [f64; 2] {
-    let m_inv = 1. / m.det().unwrap() * array![[m[(1, 1)], -m[(0, 1)]], [-m[(1, 0)], m[(0, 0)]]];
-    let qdd = m_inv * rhs;
-    [qdd[(0, 0)], qdd[(1, 0)]]
-}
-
 // return function's derivatives at a given state and with a given input
 fn state_derivative(state: &[f64; STATE_SIZE], input: &ArrayView1<f64>) -> [f64; STATE_SIZE] {
     let fx = input[0].clamp(-INPUT_MAX, INPUT_MAX);
@@ -101,8 +94,7 @@ fn state_derivative(state: &[f64; STATE_SIZE], input: &ArrayView1<f64>) -> [f64;
     // right-hand side of M * second_derivative equation (2x1)
     let rhs = tau + b * fx - c;
 
-    // let second_derivative = m.solve_into(rhs.column(0).to_owned()).unwrap();
-    let second_derivative = qdd_from_m_rhs(&m, &rhs.column(0).to_owned());
+    let second_derivative = m.solve_into(rhs.column(0).to_owned()).unwrap();
 
     let friction_coeff = 0.2;
 
@@ -275,7 +267,7 @@ pub fn main() {
     let now = Instant::now();
     let mut trajectory = Array1::<[f64; 4]>::default(0);
 
-    let mut initial_state = [0., -PI / 2., 0., 0.];
+    let mut initial_state = [PI / 2. + 0.01, 0., 0., 0.];
 
     // how many lookahead periods we should do
     let num_chunks = 5;
@@ -283,25 +275,28 @@ pub fn main() {
     for _ in 0..num_chunks {
         let mpc_problem = get_mpc_problem(initial_state, GOAL);
 
-        let solver = NelderMead::new(mpc_problem.parameter_vector());
-        // Run solver
-        // plotting is actually the slowest part when in debug mode, but solving is also much slower of course
-        #[cfg(debug_assertions)]
-        let res = Executor::new(mpc_problem, solver)
-            .configure(|state| state.max_iters(1000))
-            .run()
-            .unwrap();
-        #[cfg(not(debug_assertions))]
-        let res = Executor::new(mpc_problem, solver)
-            .configure(|state| state.max_iters(10000))
-            .run()
-            .unwrap();
+        // let solver = NelderMead::new(mpc_problem.parameter_vector());
+        // // Run solver
+        // // plotting is actually the slowest part when in debug mode, but solving is also much slower of course
+        // #[cfg(debug_assertions)]
+        // let res = Executor::new(mpc_problem, solver)
+        //     .configure(|state| state.max_iters(1000))
+        //     .run()
+        //     .unwrap();
+        // #[cfg(not(debug_assertions))]
+        // let res = Executor::new(mpc_problem, solver)
+        //     .configure(|state| state.max_iters(10000))
+        //     .run()
+        //     .unwrap();
 
-        let mpc_problem = get_mpc_problem(initial_state, GOAL);
+        // let mpc_problem = get_mpc_problem(initial_state, GOAL);
 
-        // update start position and append to overall trajectory
+        // // update start position and append to overall trajectory
+        // let this_trajectory =
+        //     mpc_problem.calculate_trajectory(&res.state.best_param.unwrap().view());
+        let n = (LOOKAHEAD / DT).ceil() as usize;
         let this_trajectory =
-            mpc_problem.calculate_trajectory(&res.state.best_param.unwrap().view());
+            mpc_problem.calculate_trajectory(&Array1::from_vec(vec![0.; n]).view());
         trajectory
             .append(ndarray::Axis(0), this_trajectory.view())
             .unwrap();
