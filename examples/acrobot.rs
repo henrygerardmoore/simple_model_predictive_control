@@ -215,9 +215,9 @@ fn trajectory_to_plot_format(trajectory: &mut Array1<[f64; 4]>) {
 }
 
 #[cfg(debug_assertions)]
-const OUT_FILE_NAME: &str = "cartpole_debug.gif";
+const OUT_FILE_NAME: &str = "acrobot_debug.gif";
 #[cfg(not(debug_assertions))]
-const OUT_FILE_NAME: &str = "cartpole_release.gif";
+const OUT_FILE_NAME: &str = "acrobot_release.gif";
 // see plotters animation example for reference:
 // https://github.com/plotters-rs/plotters/blob/master/plotters/examples/animation.rs
 pub fn main() {
