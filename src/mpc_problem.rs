@@ -10,7 +10,7 @@ use ndarray::{
     Array, Array1, ArrayView1, ArrayView2,
     parallel::prelude::{IntoParallelRefIterator, ParallelIterator},
 };
-use rand::{Rng, distr::Uniform, rngs::ThreadRng};
+use rand::{Rng, distr::Uniform, rngs::StdRng};
 
 /// The dynamics function used by [MPCProblem]
 ///
@@ -64,7 +64,7 @@ pub struct MPCProblem<const STATE_SIZE: usize, const INPUT_SIZE: usize> {
     pub(crate) terminal_cost:
         Option<Box<dyn Fn(&[f64; STATE_SIZE], &[f64; STATE_SIZE]) -> f64 + Send + Sync>>,
 
-    pub(crate) rng: Mutex<ThreadRng>,
+    pub(crate) rng: Mutex<StdRng>,
 }
 
 /// Implement `argmin`'s `CostFunction` type.
