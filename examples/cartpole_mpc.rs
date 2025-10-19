@@ -13,12 +13,13 @@ use plotters::{prelude::*, style::full_palette::GREY};
 // the angle state is positive CCW and
 const STATE_SIZE: usize = 4;
 
-// x force on cart
+// x force on cart (N)
 const INPUT_SIZE: usize = 1;
 
-// timestep
+// timestep (s)
 const DT: f64 = 0.05;
 
+// lookahead time (s)
 const LOOKAHEAD: f64 = 2.5;
 
 // cart in center, rod pointing straight up
@@ -148,11 +149,10 @@ fn get_mpc_problem(
 
 fn plot(trajectory: Array1<[f64; STATE_SIZE]>) -> Result<(), Box<dyn std::error::Error>> {
     let now = Instant::now();
-    let frame_time = ((DT * 1000.).round() as u32).max(50);
+    // don't render any faster than 100 fps; if we're simulating faster than that this will result in a little slow-mo, which is ok
+    let frame_time = ((DT * 1000.).round() as u32).max(10);
     let root = BitMapBackend::gif(OUT_FILE_NAME, (1280, 720), frame_time)?.into_drawing_area();
 
-    // step by 0.1 / DT to target ~100 fps
-    // (0..trajectory.len()).step_by(((0.1 / DT) as usize).max(1))
     for i in 0..trajectory.len() {
         root.fill(&WHITE)?;
 
@@ -208,7 +208,7 @@ fn plot(trajectory: Array1<[f64; STATE_SIZE]>) -> Result<(), Box<dyn std::error:
 }
 
 // change the trajectory from (x_cart, vx_cart, theta, omega) to (x_cart, y_cart, x_pole_tip, y_pole_tip)
-fn trajectory_to_cartesian(trajectory: &mut Array1<[f64; 4]>) {
+fn trajectory_to_plot_format(trajectory: &mut Array1<[f64; 4]>) {
     trajectory.iter_mut().for_each(|state| {
         let x_cart = state[0];
         let theta = state[2];
@@ -269,7 +269,7 @@ pub fn main() {
         initial_state = *this_trajectory.last().unwrap();
     }
 
-    trajectory_to_cartesian(&mut trajectory);
+    trajectory_to_plot_format(&mut trajectory);
 
     let elapsed = now.elapsed();
     println!(
