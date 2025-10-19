@@ -64,6 +64,112 @@ pub struct MPCOutput {
 
 // Fn(&ArrayView2<f64>) -> Array2<f64>
 impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCController<STATE_SIZE, INPUT_SIZE> {
+    pub(crate) fn cost_function(&self) -> impl GroupFunc {
+        |x: &ArrayView2<f64>| -> Array2<f64> {
+            let mut y: Array2<f64> = Array2::zeros((x.nrows(), 1));
+            Zip::from(y.rows_mut())
+                .and(x.rows())
+                .par_for_each(|mut yi, xi| {
+                    let trajectory = self.calculate_trajectory(&xi);
+                    let trajectory_cost = self.calculate_trajectory_cost(&trajectory, &xi);
+                    let constraints = self.calculate_trajectory_constraints(&trajectory);
+                    let cost_iter = std::iter::once(trajectory_cost).chain(constraints);
+                    let output = Array::from_iter(cost_iter);
+                    yi.assign(&output)
+                });
+            y
+        }
+    }
+
+    pub(crate) fn integrate_dynamics(
+        &self,
+        current_state: &[f64; STATE_SIZE],
+        derivatives: &[f64; STATE_SIZE],
+    ) -> [f64; STATE_SIZE] {
+        // just do a simple Euler integration for now
+        let mut next_state = [0_f64; STATE_SIZE];
+        for i in 0..STATE_SIZE {
+            next_state[i] = current_state[i] + self.sample_period.as_secs_f64() * derivatives[i];
+        }
+        next_state
+    }
+
+    // maps the inputs to the trajectory they would result in
+    pub(crate) fn calculate_trajectory(
+        &self,
+        inputs: &ArrayView1<f64>,
+    ) -> Array1<[f64; STATE_SIZE]> {
+        let mut current_state = self.current_state;
+        let trajectory_iter = Self::inputs_to_chunks(inputs).map(|input| {
+            let next_state = match &self.dynamics_function {
+                DynamicsFunction::Continuous(continuous_dynamics_function) => {
+                    let derivatives = continuous_dynamics_function(&current_state, input);
+                    self.integrate_dynamics(&current_state, &derivatives)
+                }
+                DynamicsFunction::Discrete(discrete_dynamics_function) => {
+                    discrete_dynamics_function(&current_state, input, self.sample_period)
+                }
+            };
+            current_state = next_state;
+            current_state
+        });
+
+        Array::from_iter(trajectory_iter)
+    }
+
+    pub(crate) fn inputs_to_chunks<'a>(
+        inputs: &'a ArrayView1<f64>,
+    ) -> impl Iterator<Item = &'a [f64; INPUT_SIZE]> {
+        dbg!("input dimension: {}", inputs.dim());
+        inputs
+            .as_slice()
+            .unwrap()
+            .chunks_exact(INPUT_SIZE)
+            .map(|chunk| TryInto::<&[f64; INPUT_SIZE]>::try_into(chunk).unwrap())
+    }
+
+    pub(crate) fn calculate_trajectory_cost(
+        &self,
+        trajectory: &Array1<[f64; STATE_SIZE]>,
+        inputs: &ArrayView1<f64>,
+    ) -> f64 {
+        let state_cost = if let Some(state_cost_function) = &self.state_cost {
+            trajectory.iter().zip(Self::inputs_to_chunks(inputs)).fold(
+                0.,
+                |accumulated_cost, (state, input)| {
+                    accumulated_cost + state_cost_function(state, input)
+                },
+            )
+        } else {
+            0.
+        };
+        // terminal cost
+        state_cost
+            + trajectory
+                .last()
+                .map(|terminal_state| {
+                    if let Some(terminal_cost_function) = &self.terminal_cost {
+                        terminal_cost_function(terminal_state, &self.setpoint)
+                    } else {
+                        0.
+                    }
+                })
+                .unwrap_or(0.)
+    }
+
+    pub(crate) fn calculate_trajectory_constraints(
+        &self,
+        trajectory: &Array1<[f64; STATE_SIZE]>,
+    ) -> impl Iterator<Item = f64> {
+        self.constraints.iter().map(|constraint_function| {
+            // map each constraint to the minimum value they take on during the trajectory
+            trajectory
+                .iter()
+                .map(constraint_function)
+                .fold(f64::INFINITY, |acc, x| acc.min(x))
+        })
+    }
+
     pub fn optimize(&mut self) -> Result<MPCOutput, String> {
         let number_steps = self
             .lookahead_duration
@@ -113,108 +219,6 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCController<STATE_SIZE,
             control_inputs: res.x_opt,
             expected_cost: res.y_opt,
             state: res.state,
-        })
-    }
-
-    fn cost_function(&self) -> impl GroupFunc {
-        |x: &ArrayView2<f64>| -> Array2<f64> {
-            let mut y: Array2<f64> = Array2::zeros((x.nrows(), 1));
-            Zip::from(y.rows_mut())
-                .and(x.rows())
-                .par_for_each(|mut yi, xi| {
-                    let trajectory = self.calculate_trajectory(&xi);
-                    let trajectory_cost = self.calculate_trajectory_cost(&trajectory, &xi);
-                    let constraints = self.calculate_trajectory_constraints(&trajectory);
-                    let cost_iter = std::iter::once(trajectory_cost).chain(constraints);
-                    let output = Array::from_iter(cost_iter);
-                    yi.assign(&output)
-                });
-            y
-        }
-    }
-
-    fn integrate_dynamics(
-        &self,
-        current_state: &[f64; STATE_SIZE],
-        derivatives: &[f64; STATE_SIZE],
-    ) -> [f64; STATE_SIZE] {
-        // just do a simple Euler integration for now
-        let mut next_state = [0_f64; STATE_SIZE];
-        for i in 0..STATE_SIZE {
-            next_state[i] = current_state[i] + self.sample_period.as_secs_f64() * derivatives[i];
-        }
-        next_state
-    }
-
-    // maps the inputs to the trajectory they would result in
-    fn calculate_trajectory(&self, inputs: &ArrayView1<f64>) -> Array1<[f64; STATE_SIZE]> {
-        let mut current_state = self.current_state;
-        let trajectory_iter = Self::inputs_to_chunks(inputs).map(|input| {
-            let next_state = match &self.dynamics_function {
-                DynamicsFunction::Continuous(continuous_dynamics_function) => {
-                    let derivatives = continuous_dynamics_function(&current_state, input);
-                    self.integrate_dynamics(&current_state, &derivatives)
-                }
-                DynamicsFunction::Discrete(discrete_dynamics_function) => {
-                    discrete_dynamics_function(&current_state, input, self.sample_period)
-                }
-            };
-            current_state = next_state;
-            current_state
-        });
-
-        Array::from_iter(trajectory_iter)
-    }
-
-    fn inputs_to_chunks<'a>(
-        inputs: &'a ArrayView1<f64>,
-    ) -> impl Iterator<Item = &'a [f64; INPUT_SIZE]> {
-        inputs
-            .as_slice()
-            .unwrap()
-            .chunks_exact(INPUT_SIZE)
-            .map(|chunk| TryInto::<&[f64; INPUT_SIZE]>::try_into(chunk).unwrap())
-    }
-
-    fn calculate_trajectory_cost(
-        &self,
-        trajectory: &Array1<[f64; STATE_SIZE]>,
-        inputs: &ArrayView1<f64>,
-    ) -> f64 {
-        let state_cost = if let Some(state_cost_function) = &self.state_cost {
-            trajectory.iter().zip(Self::inputs_to_chunks(inputs)).fold(
-                0.,
-                |accumulated_cost, (state, input)| {
-                    accumulated_cost + state_cost_function(state, input)
-                },
-            )
-        } else {
-            0.
-        };
-        // terminal cost
-        state_cost
-            + trajectory
-                .last()
-                .map(|terminal_state| {
-                    if let Some(terminal_cost_function) = &self.terminal_cost {
-                        terminal_cost_function(terminal_state, &self.setpoint)
-                    } else {
-                        0.
-                    }
-                })
-                .unwrap_or(0.)
-    }
-
-    fn calculate_trajectory_constraints(
-        &self,
-        trajectory: &Array1<[f64; STATE_SIZE]>,
-    ) -> impl Iterator<Item = f64> {
-        self.constraints.iter().map(|constraint_function| {
-            // map each constraint to the minimum value they take on during the trajectory
-            trajectory
-                .iter()
-                .map(constraint_function)
-                .fold(f64::INFINITY, |acc, x| acc.min(x))
         })
     }
 
