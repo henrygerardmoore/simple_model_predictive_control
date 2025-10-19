@@ -2,7 +2,10 @@ use core::f64;
 use std::time::Duration;
 
 use argmin::core::CostFunction;
-use ndarray::{Array, Array1, ArrayView1, ArrayView2};
+use ndarray::{
+    Array, Array1, ArrayView1, ArrayView2,
+    parallel::prelude::{IntoParallelRefIterator, ParallelIterator},
+};
 
 // the MPCController can take a function that returns the derivative and integrate it internally as needed
 // or a function that takes a state and a dt and returns the next state
@@ -54,6 +57,16 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> CostFunction
         let trajectory = self.calculate_trajectory(&x_view);
         let trajectory_cost = self.calculate_trajectory_cost(&trajectory, &x_view);
         Ok(trajectory_cost)
+    }
+
+    // only particle swarm optimization in argmin currently supports this
+    fn bulk_cost<P>(&self, params: &[P]) -> Result<Vec<Self::Output>, argmin_math::Error>
+    where
+        P: std::borrow::Borrow<Self::Param> + argmin::core::SyncAlias,
+        Self::Output: argmin::core::SendAlias,
+        Self: argmin::core::SyncAlias,
+    {
+        params.par_iter().map(|p| self.cost(p.borrow())).collect()
     }
 }
 
