@@ -295,7 +295,7 @@ pub fn main() {
 
     // how many lookahead periods we should do
     let target_time = 25.;
-    let num_chunks = (target_time / LOOKAHEAD).ceil() as usize;
+    let num_chunks = 2 * (target_time / LOOKAHEAD).ceil() as usize;
     let n = (LOOKAHEAD / DT).ceil() as usize;
     let n_half = (LOOKAHEAD / 2. / DT).ceil() as usize;
 
