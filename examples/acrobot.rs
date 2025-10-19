@@ -7,7 +7,7 @@ use argmin::{core::Executor, solver::neldermead::NelderMead};
 use ndarray::{Array1, Array2, ArrayView1, array};
 
 use mpc_rs::prelude::*;
-use ndarray_linalg::{Determinant, Solve};
+use ndarray_linalg::Solve;
 use plotters::prelude::*;
 
 // link 1 angle CCW from right (rad), link 2 angle of deflection CCW *from link 1* (rad), link 1 angular velocity (rad/s), link 2 angular velocity (rad/s)
@@ -20,13 +20,15 @@ const INPUT_SIZE: usize = 1;
 const DT: f64 = 0.05; // (s)
 
 // lookahead time (s)
-const LOOKAHEAD: f64 = 2.5;
+const LOOKAHEAD: f64 = 5.0;
 
+// start pointing straight down
+const INITIAL_STATE: [f64; 4] = [-PI / 2., 0., 0., 0.];
 // both arms pointing straight up
 const GOAL: [f64; 4] = [PI / 2., 0., 0., 0.];
 
 // acrobot parameters
-const INPUT_MAX: f64 = 200.; // N*m
+const INPUT_MAX: f64 = 100.; // N*m
 const GRAVITY: f64 = -9.80665; // m/s^2
 const L1: f64 = 2.0; // m
 // length to center of 1
@@ -133,6 +135,9 @@ fn rk4_step(state: &[f64; STATE_SIZE], input: &ArrayView1<f64>, dt: f64) -> [f64
     // wrap angles
     new_state[0] = new_state[0].rem_euclid(TAU);
     new_state[1] = new_state[1].rem_euclid(TAU);
+    // don't let angular velocity get too high
+    new_state[2] = new_state[2].clamp(-20., 20.);
+    new_state[3] = new_state[3].clamp(-20., 20.);
     new_state
 }
 
@@ -146,7 +151,7 @@ fn dynamics_function(
     if dt <= 0. {
         return state.clone();
     }
-    let n_rk4_steps = 20;
+    let n_rk4_steps = 1;
     let mut state = state.clone();
     for _ in 0..n_rk4_steps {
         state = rk4_step(&state, input, dt / (n_rk4_steps as f64));
@@ -155,7 +160,7 @@ fn dynamics_function(
 }
 
 fn terminal_cost(state: &[f64; STATE_SIZE], setpoint: &[f64; STATE_SIZE]) -> f64 {
-    // penalize off-target angle and nonzero velocity
+    // penalize off-target angle or velocity
     let weight: [f64; STATE_SIZE] = [1., 1., 1., 1.];
     (0..STATE_SIZE).fold(0., |acc, i| {
         acc + weight[i] * (state[i] - setpoint[i]).powi(2)
@@ -165,10 +170,25 @@ fn terminal_cost(state: &[f64; STATE_SIZE], setpoint: &[f64; STATE_SIZE]) -> f64
 fn state_cost(
     state: &[f64; STATE_SIZE],
     setpoint: &[f64; STATE_SIZE],
-    _command: &ArrayView1<f64>,
+    command: &ArrayView1<f64>,
 ) -> f64 {
-    // penalize off-target angle for both links
-    (state[0] - setpoint[0]).powi(2) + (state[2] - setpoint[2]).powi(2)
+    // let the first link deviate a bit without penalty
+    let angle_tolerance = 0.0;
+    // penalize off-target angle for first link
+    5. * (angle_difference(state[0], setpoint[0]) - angle_tolerance).max(0.).powi(2)
+    // smaller penalty for second link
+    + angle_difference(state[1], setpoint[1]).powi(2)
+    // penalize high commands a little bit
+    // + 0.0001 * command.dot(command)
+}
+
+fn angle_difference(theta_1: f64, theta_2: f64) -> f64 {
+    let diff_naive = (theta_1 - theta_2).abs();
+    if diff_naive > PI {
+        TAU - diff_naive
+    } else {
+        diff_naive
+    }
 }
 
 fn get_mpc_problem(
@@ -267,40 +287,37 @@ pub fn main() {
     let now = Instant::now();
     let mut trajectory = Array1::<[f64; 4]>::default(0);
 
-    let mut initial_state = [PI / 2. + 0.01, 0., 0., 0.];
+    let mut state = INITIAL_STATE;
 
     // how many lookahead periods we should do
-    let num_chunks = 5;
+    let num_chunks = 4;
 
     for _ in 0..num_chunks {
-        let mpc_problem = get_mpc_problem(initial_state, GOAL);
+        let mpc_problem = get_mpc_problem(state, GOAL);
 
-        // let solver = NelderMead::new(mpc_problem.parameter_vector());
-        // // Run solver
-        // // plotting is actually the slowest part when in debug mode, but solving is also much slower of course
-        // #[cfg(debug_assertions)]
-        // let res = Executor::new(mpc_problem, solver)
-        //     .configure(|state| state.max_iters(1000))
-        //     .run()
-        //     .unwrap();
-        // #[cfg(not(debug_assertions))]
-        // let res = Executor::new(mpc_problem, solver)
-        //     .configure(|state| state.max_iters(10000))
-        //     .run()
-        //     .unwrap();
+        let solver = NelderMead::new(mpc_problem.parameter_vector());
+        // Run solver
+        // plotting is actually the slowest part when in debug mode, but solving is also much slower of course
+        #[cfg(debug_assertions)]
+        let res = Executor::new(mpc_problem, solver)
+            .configure(|state| state.max_iters(1000))
+            .run()
+            .unwrap();
+        #[cfg(not(debug_assertions))]
+        let res = Executor::new(mpc_problem, solver)
+            .configure(|state| state.max_iters(10000))
+            .run()
+            .unwrap();
 
-        // let mpc_problem = get_mpc_problem(initial_state, GOAL);
+        let mpc_problem = get_mpc_problem(state, GOAL);
 
-        // // update start position and append to overall trajectory
-        // let this_trajectory =
-        //     mpc_problem.calculate_trajectory(&res.state.best_param.unwrap().view());
-        let n = (LOOKAHEAD / DT).ceil() as usize;
+        // update start position and append to overall trajectory
         let this_trajectory =
-            mpc_problem.calculate_trajectory(&Array1::from_vec(vec![0.; n]).view());
+            mpc_problem.calculate_trajectory(&res.state.best_param.unwrap().view());
         trajectory
             .append(ndarray::Axis(0), this_trajectory.view())
             .unwrap();
-        initial_state = *this_trajectory.last().unwrap();
+        state = *this_trajectory.last().unwrap();
     }
 
     trajectory_to_plot_format(&mut trajectory);
