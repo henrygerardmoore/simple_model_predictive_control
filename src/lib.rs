@@ -9,15 +9,26 @@ use egobox_ego::{
 };
 use ndarray::{Array, Array2, ArrayView2, Ix1, Zip, array};
 
+pub type DynamicsFn<const STATE_SIZE: usize, const INPUT_SIZE: usize> =
+    Box<dyn Fn(&[f64; STATE_SIZE], &[f64; INPUT_SIZE]) -> [f64; STATE_SIZE] + Send>;
+
+// the MPCController can take a function that returns the derivative and integrate it internally as needed
+// or a function that takes a state and a dt and returns the next state
+// if you want fine control of the integration or have dynamics that cannot be captured by a derivative, then you should use Discrete
+pub enum DynamicsFunction<const STATE_SIZE: usize, const INPUT_SIZE: usize> {
+    // f(x, u) -> xdot
+    Continuous(DynamicsFn<STATE_SIZE, INPUT_SIZE>),
+    // f(x_k, u_k) -> x_{k+1}
+    Discrete(DynamicsFn<STATE_SIZE, INPUT_SIZE>),
+}
+
 // WIP
 #[allow(dead_code, clippy::type_complexity)]
 pub struct MPCController<const STATE_SIZE: usize, const INPUT_SIZE: usize> {
     setpoint: [f64; STATE_SIZE],
     sample_period: Duration,
     lookahead_duration: Duration,
-    // f(x, u) -> xdot
-    dynamics_function:
-        Box<dyn Fn(&[f64; STATE_SIZE], &[f64; INPUT_SIZE]) -> [f64; INPUT_SIZE] + Send>,
+    dynamics_function: DynamicsFunction<STATE_SIZE, INPUT_SIZE>,
 
     // MPC controller must have at least one of the below cost functions
     // optional state cost function, J(x, u) -> f64
