@@ -4,7 +4,7 @@ use argmin::core::Executor;
 use argmin::solver::neldermead::NelderMead;
 use ndarray::{Array1, ArrayView1};
 
-use ego_mpc::prelude::*;
+use mpc_rs::prelude::*;
 use plotters::prelude::*;
 
 // x, x velocity, y, y velocity

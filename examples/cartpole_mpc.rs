@@ -1,13 +1,12 @@
 use std::{
     f64::consts::{PI, TAU},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
-use argmin::core::Executor;
-use argmin::solver::neldermead::NelderMead;
+use argmin::{core::Executor, solver::particleswarm::ParticleSwarm};
 use ndarray::{Array1, ArrayView1};
 
-use ego_mpc::prelude::*;
+use mpc_rs::prelude::*;
 use plotters::{prelude::*, style::full_palette::GREY};
 
 // cart position (m), cart velocity (m/s), angle (rad), angular velocity (rad)
@@ -20,17 +19,18 @@ const INPUT_SIZE: usize = 1;
 // timestep
 const DT: f64 = 0.05;
 
-const LOOKAHEAD: f64 = 1.00;
+const LOOKAHEAD: f64 = 1.0;
 
 // cart in center, rod pointing straight up
 const GOAL: [f64; 4] = [0., 0., PI, 0.];
 
 // cartpole parameters
-const CART_MASS: f64 = 10.; // kg
-const POLE_MASS: f64 = 1.; // kg
+const CART_MASS: f64 = 1.; // kg
+const POLE_MASS: f64 = 0.1; // kg
 const POLE_LENGTH: f64 = 0.2; // m
 const GRAVITY: f64 = 9.80665; // m/s^2
-const CART_RAIL_BOUNDS: (f64, f64) = (-0.5, 0.5);
+const CART_RAIL_BOUNDS: (f64, f64) = (-0.5, 0.5); // (N, N)
+const INPUT_MAX: f64 = 100.; // N
 
 // dynamics for this example are from https://underactuated.mit.edu/acrobot.html
 fn dynamics_function(
@@ -42,62 +42,83 @@ fn dynamics_function(
     if dt <= 0. {
         return state.clone();
     }
+    let fx = input[0].clamp(-INPUT_MAX, INPUT_MAX);
 
-    let x = state[0];
-    let vx = state[1];
-    let theta = state[2];
-    let omega = state[3].clamp(-50., 50.); // don't let omega get crazy high
+    let n_euler_steps = 20;
+    let dt = dt / (n_euler_steps as f64);
+    let mut state = state.clone();
 
-    // now, see if our x velocity is going to carry us past the rail extents and if it is, add the force to stop the cart to fx
-    let next_x_position = x + dt * vx;
-    let fx = if next_x_position < CART_RAIL_BOUNDS.0 || next_x_position > CART_RAIL_BOUNDS.1 {
-        // clamp next x position and velocity
-        // F = dp/dt, so apply the necessary force to reduce the cart's velocity to 0 and any additional force from the cart in the other direction
-        let wall_force = -vx * CART_MASS / dt;
-        if input[0].signum() == wall_force.signum() {
-            wall_force + input[0]
+    let angular_damping_coefficient = 1.5;
+    let linear_damping_coefficient = 0.5;
+
+    // fine euler integration
+    for _ in 0..n_euler_steps {
+        let x = state[0];
+        let vx = state[1];
+        let theta = state[2];
+        let omega = state[3].min((PI - 0.01) / DT); // clamp this to just under half the aliasing rate
+
+        // now, see if our x velocity is going to carry us past the rail extents and if it is, add the force to stop the cart to fx
+        let next_x_position = x + dt * vx;
+        if false && next_x_position < -CART_RAIL_BOUNDS.0 || next_x_position > CART_RAIL_BOUNDS.1 {
+            // collision
+            let next_x_position = next_x_position.clamp(CART_RAIL_BOUNDS.0, CART_RAIL_BOUNDS.1);
+            let next_vx = 0.;
+            // F = dp/dt, the force necessary to stop the cart
+            let fx = (-vx * (CART_MASS + POLE_MASS * theta.sin().powi(2)) / dt)
+                .clamp(-INPUT_MAX, INPUT_MAX);
+            // theta accel
+            let theta_accel = 1. / (POLE_LENGTH * (CART_MASS + POLE_MASS * theta.sin().powi(2)))
+                * (-fx * theta.cos()
+                    - POLE_MASS * POLE_LENGTH * omega.powi(2) * theta.cos() * theta.sin()
+                    - (CART_MASS + POLE_MASS) * GRAVITY * theta.sin())
+                - omega * angular_damping_coefficient;
+
+            state = [
+                next_x_position,
+                next_vx,
+                (theta + dt * omega).rem_euclid(TAU), // wrap angle to 0-2*pi value
+                omega + dt * theta_accel,
+            ];
         } else {
-            // this is essentially equivalent to the wall also stopping the external cart force
-            wall_force
+            // x accel
+            let x_accel = 1. / (CART_MASS + POLE_MASS * theta.sin().powi(2))
+                * (fx
+                    + POLE_MASS
+                        * theta.sin()
+                        * (POLE_LENGTH * omega.powi(2) + GRAVITY * theta.cos()))
+                - vx * linear_damping_coefficient;
+
+            // theta accel
+            let theta_accel = 1. / (POLE_LENGTH * (CART_MASS + POLE_MASS * theta.sin().powi(2)))
+                * (-fx * theta.cos()
+                    - POLE_MASS * POLE_LENGTH * omega.powi(2) * theta.cos() * theta.sin()
+                    - (CART_MASS + POLE_MASS) * GRAVITY * theta.sin())
+                - omega * angular_damping_coefficient;
+
+            // euler integration
+            state = [
+                next_x_position,
+                vx + dt * x_accel,
+                (theta + dt * omega).rem_euclid(TAU), // wrap angle to 0-2*pi value
+                omega + dt * theta_accel,
+            ];
         }
-    } else {
-        input[0]
-    };
-
-    // x accel
-    let x_accel = 1. / (CART_MASS + POLE_MASS * theta.sin().powi(2))
-        * (fx + POLE_MASS * theta.sin() * (POLE_LENGTH * omega.powi(2) + GRAVITY * theta.cos()));
-
-    // theta accel
-    let theta_accel = 1. / (POLE_LENGTH * (CART_MASS + POLE_MASS * theta.sin().powi(2)))
-        * (-fx
-            - POLE_MASS * POLE_LENGTH * omega.powi(2) * theta.cos() * theta.sin()
-            - (CART_MASS + POLE_MASS) * GRAVITY * theta.sin());
-
-    // euler integration and clamp x position to rail bounds
-    [
-        next_x_position.clamp(CART_RAIL_BOUNDS.0, CART_RAIL_BOUNDS.1),
-        vx + dt * x_accel,
-        (theta + dt * omega).rem_euclid(TAU), // wrap angle to 0-2*pi value
-        omega + dt * theta_accel,
-    ]
-}
-
-fn distance_cost(state: &[f64; STATE_SIZE], setpoint: &[f64; STATE_SIZE]) -> f64 {
-    let weight: [f64; 4] = [2.0, 0.1, 1.0, 0.1];
-    // l2 distance squared
-    (0..STATE_SIZE).fold(0., |acc, index| {
-        acc + weight[index] * (state[index] - setpoint[index]).powi(2)
-    })
+    }
+    state
 }
 
 fn state_cost(
     state: &[f64; STATE_SIZE],
-    _setpoint: &[f64; STATE_SIZE],
-    command: &ArrayView1<f64>,
+    setpoint: &[f64; STATE_SIZE],
+    _command: &ArrayView1<f64>,
 ) -> f64 {
-    // penalize high thrust and any angular velocity
-    0.01 * command.dot(command) + 0.001 * state[3].abs()
+    // penalize not meeting the goal
+    (state[0] - setpoint[0]).powi(2) + 3. * (state[2] - setpoint[2]).powi(2)
+    // and high control inputs
+    // + 0.1 * command.dot(command)
+    // and a little bit for velocity
+    // + 0.001 * ((state[1] - setpoint[1]).powi(2) + (state[3] - setpoint[3]).powi(2))
 }
 
 fn get_mpc_problem(
@@ -106,7 +127,6 @@ fn get_mpc_problem(
 ) -> MPCProblem<STATE_SIZE, INPUT_SIZE> {
     MPCControllerBuilder::<STATE_SIZE, INPUT_SIZE>::new()
         .dynamics_function(DynamicsFunction::Discrete(Box::new(&dynamics_function)))
-        .terminal_cost(&distance_cost)
         .state_cost(&state_cost)
         .lookahead_duration(Duration::from_secs_f64(LOOKAHEAD))
         .sample_period(Duration::from_secs_f64(DT))
@@ -118,9 +138,12 @@ fn get_mpc_problem(
 }
 
 fn plot(trajectory: Array1<[f64; STATE_SIZE]>) -> Result<(), Box<dyn std::error::Error>> {
-    let root = BitMapBackend::gif(OUT_FILE_NAME, (1280, 720), (DT * 1000.).round() as u32)?
-        .into_drawing_area();
+    let now = Instant::now();
+    let frame_time = ((DT * 1000.).round() as u32).max(50);
+    let root = BitMapBackend::gif(OUT_FILE_NAME, (1280, 720), frame_time)?.into_drawing_area();
 
+    // step by 0.1 / DT to target ~100 fps
+    // (0..trajectory.len()).step_by(((0.1 / DT) as usize).max(1))
     for i in 0..trajectory.len() {
         root.fill(&WHITE)?;
 
@@ -165,7 +188,12 @@ fn plot(trajectory: Array1<[f64; STATE_SIZE]>) -> Result<(), Box<dyn std::error:
         root.present()?;
     }
 
-    println!("Result has been saved to {}", OUT_FILE_NAME);
+    let elapsed = now.elapsed();
+    println!(
+        "Plotting took {:.1} seconds. Result has been saved to {}",
+        elapsed.as_secs_f64(),
+        OUT_FILE_NAME
+    );
 
     Ok(())
 }
@@ -195,18 +223,22 @@ const OUT_FILE_NAME: &str = "cartpole_release.gif";
 // see plotters animation example for reference:
 // https://github.com/plotters-rs/plotters/blob/master/plotters/examples/animation.rs
 pub fn main() {
+    let now = Instant::now();
     let mut trajectory = Array1::<[f64; 4]>::default(0);
 
-    let mut initial_state = [0.; STATE_SIZE];
+    let mut initial_state = [0., 0., 0., 0.];
 
     // how many lookahead periods we should do
-    let num_chunks = 40;
+    let num_chunks = 5;
+    let n = (LOOKAHEAD / DT).ceil() as usize;
 
     for _ in 0..num_chunks {
         let mpc_problem = get_mpc_problem(initial_state, GOAL);
 
-        let solver = NelderMead::new(mpc_problem.parameter_vector());
+        let lower_bounds = Array1::from_vec(vec![-INPUT_MAX; n]);
+        let upper_bounds = Array1::from_vec(vec![INPUT_MAX; n]);
 
+        let solver = ParticleSwarm::new((lower_bounds, upper_bounds.clone()), 1000);
         // Run solver
         // plotting is actually the slowest part when in debug mode, but solving is also much slower of course
         #[cfg(debug_assertions)]
@@ -216,7 +248,7 @@ pub fn main() {
             .unwrap();
         #[cfg(not(debug_assertions))]
         let res = Executor::new(mpc_problem, solver)
-            .configure(|state| state.max_iters(100000))
+            .configure(|state| state.max_iters(100))
             .run()
             .unwrap();
 
@@ -224,7 +256,8 @@ pub fn main() {
 
         // update start position and append to overall trajectory
         let this_trajectory =
-            mpc_problem.calculate_trajectory(&res.state.best_param.unwrap().view());
+            mpc_problem.calculate_trajectory(&res.state.best_individual.unwrap().position.view());
+        // let this_trajectory = mpc_problem.calculate_trajectory(&Array1::from_vec(vec![10.; n]).view());
         trajectory
             .append(ndarray::Axis(0), this_trajectory.view())
             .unwrap();
@@ -233,6 +266,11 @@ pub fn main() {
 
     trajectory_to_cartesian(&mut trajectory);
 
-    println!("MPC simulation complete, now plotting...");
+    let elapsed = now.elapsed();
+    println!(
+        "MPC simulation of {:.1} seconds complete in {:.1} seconds, now plotting...",
+        (num_chunks as f64) * LOOKAHEAD,
+        elapsed.as_secs_f64()
+    );
     plot(trajectory).unwrap();
 }

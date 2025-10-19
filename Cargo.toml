@@ -1,5 +1,5 @@
 [package]
-name = "ego_mpc"
+name = "mpc_rs"
 version = "0.1.0"
 edition = "2024"
 
