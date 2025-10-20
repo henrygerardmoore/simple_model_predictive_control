@@ -23,6 +23,10 @@ Please feel encouraged to use this project as inspiration or a starting point fo
 I plan to implement a wrapper for this as a controller in [Copper](https://github.com/copper-project/copper-rs) along with using it for [their existing cartpole example](https://github.com/copper-project/copper-rs/tree/master/examples/cu_rp_balancebot), so stay tuned for a more realistic simulated example!
 I will provide a link to that example from this README when it is complete.
 
+I also plan to make a dynamics-aware optimizer for `argmin`. You may note that the existing example for acrobot performs only decently, same as for the cartpole example.
+This is because the optimizers I am using are simply optimizing the entire string of inputs over the whole lookahead duration, so dynamics is a black box to them.
+I will modify the examples and remove this note when that optimizer is ready.
+
 ## Areas for Improvement
 
 ### Cost function
