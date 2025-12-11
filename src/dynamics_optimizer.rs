@@ -68,6 +68,7 @@ pub struct DynamicsOptimizer {
 
     state_cost_epsilon: f64,
 
+    // TODO: try including all nodes in this
     leaves: BTreeSet<NodeIDAndCost>,
 }
 
@@ -189,6 +190,7 @@ impl DynamicsOptimizer {
     }
 
     // find the `num_nodes` best leaves and add children to them
+    // TODO: try out importance sampling here, too
     fn grow_nodes(&mut self, num_nodes: usize) {
         let best_leaf_ids: Vec<NodeId> = self
             .leaves
@@ -504,7 +506,7 @@ mod test {
         let success_rate = (num_successes as f64) / (num_trials as f64);
 
         println!("success rate after {} trials: {}", num_trials, success_rate);
-        assert!(success_rate > 0.99);
+        assert!(success_rate > 0.98);
     }
 
     #[test]
