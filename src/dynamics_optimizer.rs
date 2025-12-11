@@ -366,8 +366,8 @@ impl DynamicsOptimizer {
     }
 
     fn particle_sample(
-        minima: Array1<f64>,
-        maxima: Array1<f64>,
+        minima: &Array1<f64>,
+        maxima: &Array1<f64>,
         num_particles: usize,
         dynamics: &DynamicsProblem,
     ) -> Vec<Particle> {
@@ -378,14 +378,14 @@ impl DynamicsOptimizer {
         let mut particles = Vec::with_capacity(num_particles);
 
         // pre-compute range once
-        let ranges = &maxima - &minima;
+        let ranges = maxima - minima;
 
         let uniform_dist = Uniform::new(0., 1.);
         let unit_randoms = Array::random((num_particles, dimension), uniform_dist);
 
         // Process each particle
         for i in 0..num_particles {
-            let input = &minima + &(&unit_randoms.row(i).to_owned() * &ranges);
+            let input = minima + &(&unit_randoms.row(i).to_owned() * &ranges);
             let cost = dynamics.cost(&input).unwrap();
             particles.push(Particle { input, cost });
         }
@@ -405,8 +405,8 @@ impl DynamicsOptimizer {
     ) -> impl Iterator<Item = (f64, DynamicsProblem, Array1<f64>)> {
         // importance sample to get `branch_factor - 1` inputs
         let population = Self::particle_sample(
-            input_min_max.0.clone(),
-            input_min_max.1.clone(),
+            &input_min_max.0,
+            &input_min_max.1,
             particle_count,
             &parent_dynamics,
         );
