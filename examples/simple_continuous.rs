@@ -1,4 +1,8 @@
-use std::{iter::once, sync::Arc, time::Duration};
+use std::{
+    iter::once,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use argmin::core::{Executor, observers::ObserverMode};
 use argmin_observer_slog::SlogLogger;
@@ -148,11 +152,6 @@ fn plot_tree(tree_segments: Vec<([f64; 2], [f64; 2])>) -> Result<(), Box<dyn std
             ShapeStyle::from(&RED.mix(0.5)).stroke_width(1),
         ))?;
     }
-    chart
-        .configure_series_labels()
-        .background_style(&WHITE.mix(0.8))
-        .border_style(&BLACK)
-        .draw()?;
 
     chart.draw_series(std::iter::once(Circle::new(
         (GOAL[0], GOAL[2]),
@@ -169,6 +168,7 @@ const OUT_FILE_NAME: &str = "simple_continuous.gif";
 // https://github.com/plotters-rs/plotters/blob/master/plotters/examples/animation.rs
 pub fn main() {
     println!("Running simple continuous MPC simulation...");
+    let now = Instant::now();
     let mut trajectory = Array1::<Array1<f64>>::default(0);
 
     let initial_state = array![0., 0., 0., 0.];
@@ -194,6 +194,10 @@ pub fn main() {
         .append(ndarray::Axis(0), this_trajectory.view())
         .unwrap();
 
-    println!("MPC simulation complete, now plotting...");
+    let elapsed = now.elapsed();
+    println!(
+        "MPC simulation complete in {:.2} seconds, now plotting...",
+        elapsed.as_secs_f64()
+    );
     plot(trajectory).unwrap();
 }
