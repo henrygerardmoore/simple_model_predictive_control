@@ -163,8 +163,12 @@ mod test {
         use std::{sync::Arc, time::Duration};
 
         use approx::assert_relative_eq;
-        use argmin::core::{CostFunction, Gradient, Jacobian};
+        use argmin::{
+            core::{CostFunction, Executor, Gradient, Hessian, Jacobian},
+            solver::{linesearch::HagerZhangLineSearch, quasinewton::LBFGS},
+        };
         use argmin_math::ArgminL2Norm;
+        use finitediff::ndarr;
         use ndarray::{Array1, ArrayView1, array};
 
         use crate::dynamics_problem::{DynamicsFunction, DynamicsProblem};
@@ -244,14 +248,10 @@ mod test {
                 .gradient(&array![input_ax])
                 .expect("Gradient calculation failed");
 
-            let gradient_state = problem.dynamics_function.get_next_state(
-                &problem.state,
-                array![input_ax].view(),
-                problem.dt,
-            );
-            let cost_diff = (problem.state_cost_function)(&gradient_state, &problem.set_point)
-                - (problem.state_cost_function)(&problem.state, &problem.set_point);
-            let gradient_expected = array![cost_diff];
+            let du = 1e-4;
+            let dcost = problem.cost(&array![input_ax + du]).unwrap()
+                - problem.cost(&array![input_ax]).unwrap();
+            let gradient_expected = array![dcost / du];
 
             // since our input size is 1
             assert_eq!(gradient.len(), 1);
@@ -285,10 +285,40 @@ mod test {
             assert_relative_eq!(jacobian, jacobian_expected, epsilon = 1e-6);
         }
         #[test]
-        fn test_hessian_continuous() {}
+        fn test_hessian_continuous() {
+            let problem = simple_continuous_dynamics_problem();
+            let input_ax = 1.;
+            let input = array![input_ax];
+            let hessian = problem.hessian(&input).expect("Hessian calculation failed");
+
+            assert_eq!(hessian.dim(), (1, 1));
+            let gradient_closure = |input: &Array1<f64>| problem.gradient(input);
+            let hessian_expected_f = ndarr::forward_jacobian(&gradient_closure);
+            let hessian_expected = hessian_expected_f(&input).unwrap();
+
+            assert_relative_eq!(hessian, hessian_expected, epsilon = 1e-6);
+        }
 
         #[test]
-        fn test_dynamics_optimization_continuous() {}
+        fn test_dynamics_optimization_continuous() {
+            let mut problem = simple_continuous_dynamics_problem();
+            // make the set point something achievable in one step
+            let optimal_ax = 3.14159265358979;
+            problem.set_point = Arc::new(array![
+                INITIAL_POS + 0.5 * optimal_ax * DT.powi(2),
+                INITIAL_VEL + optimal_ax * DT
+            ]);
+            let input_ax = 1.;
+            let input = array![input_ax];
+            let linesearch = HagerZhangLineSearch::new();
+            let solver = LBFGS::new(linesearch, 7);
+            let res = Executor::new(problem.clone(), solver)
+                .configure(|state| state.param(input).max_iters(10))
+                .run()
+                .unwrap();
+            let optimized_input = res.state.best_param.unwrap();
+            assert!((optimized_input[0] - optimal_ax).abs() < 1e-4);
+        }
     }
 
     mod discrete {
