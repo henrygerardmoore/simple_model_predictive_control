@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 
 use argmin::core::CostFunction;
 use ndarray::{
-    Array, Array1,
+    Array, Array1, ArrayView1,
     parallel::prelude::{IntoParallelRefIterator, ParallelIterator},
 };
 
@@ -75,7 +75,7 @@ impl MPCProblem {
             dynamics_cost_function,
         }
     }
-    pub fn calculate_trajectory(&self, inputs: &Array1<f64>) -> Array1<Array1<f64>> {
+    pub fn calculate_trajectory(&self, inputs: ArrayView1<f64>) -> Array1<Array1<f64>> {
         let mut current_state = self.current_state.clone();
 
         Array::from_iter(
@@ -114,7 +114,7 @@ impl CostFunction for MPCProblem {
     /// Calculate the trajectory for a given series of inputs,
     /// then calculate the cost of that trajectory.
     fn cost(&self, inputs: &Self::Param) -> Result<Self::Output, argmin::core::Error> {
-        let trajectory = self.calculate_trajectory(inputs);
+        let trajectory = self.calculate_trajectory(inputs.view());
         let trajectory_cost = self.calculate_trajectory_cost(&trajectory, inputs);
         Ok(trajectory_cost)
     }
@@ -184,7 +184,7 @@ mod test {
     fn test_trajectory_calculation() {
         let input = -0.314159;
         let mpc_problem = get_simple_problem(array![0., 0.]);
-        let trajectory = mpc_problem.calculate_trajectory(&array![input]);
+        let trajectory = mpc_problem.calculate_trajectory(array![input].view());
         let expected_endpoint = array![
             INITIAL_POS + 0.5 * input * DT.powi(2),
             INITIAL_VEL + input * DT
@@ -239,7 +239,7 @@ mod test {
             .unwrap();
         let optimized_inputs = res.state.best_param.unwrap();
         let mpc_problem = get_simple_problem(goal.clone());
-        let trajectory = mpc_problem.calculate_trajectory(&optimized_inputs);
+        let trajectory = mpc_problem.calculate_trajectory(optimized_inputs.view());
         let last_state = trajectory.last().unwrap();
 
         assert!((goal - last_state).norm() < 1e-5);

@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     fmt::{self, Display, Formatter},
     iter::once,
 };
@@ -13,7 +14,41 @@ use ndarray::Array1;
 
 use crate::{dynamics_problem::DynamicsProblem, prelude::MPCProblem};
 
-type DynamicsNodeType = (DynamicsProblem, Array1<f64>);
+// the state/dynamics problem, the inputs to get from parent to this node, and this node's cost
+type DynamicsNodeType = (DynamicsProblem, Array1<f64>, f64);
+
+#[derive(Clone, Copy)]
+pub struct NodeAndCost(NodeId, f64);
+
+// we don't care about node id in comparison
+impl PartialEq for NodeAndCost {
+    fn eq(&self, other: &Self) -> bool {
+        if self.1 == other.1 {
+            // tie-break on node ID
+            self.0 == other.0
+        } else {
+            false
+        }
+    }
+}
+
+impl Eq for NodeAndCost {}
+
+impl PartialOrd for NodeAndCost {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for NodeAndCost {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match self.1.total_cmp(&other.1) {
+            // tie-break on node ID
+            std::cmp::Ordering::Equal => self.0.cmp(&other.0),
+            _ => self.1.total_cmp(&other.1),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct DynamicsOptimizer {
     // the dynamics at a state and the inputs to get there
@@ -31,7 +66,8 @@ pub struct DynamicsOptimizer {
     orphans: Vec<NodeId>,
 
     state_cost_epsilon: f64,
-    // WIP: add BTreeSet of node IDs sorted based on cost to avoid recomputing leaf costs every add or prune call
+
+    leaves: BTreeSet<NodeAndCost>,
 }
 
 impl DynamicsOptimizer {
@@ -48,17 +84,19 @@ impl DynamicsOptimizer {
 
         let target_size = max_depth * input_size * 1000;
 
+        let root_dynamics = DynamicsProblem {
+            dynamics_function: mpc_problem.dynamics_function.clone(),
+            state_cost_function: mpc_problem.state_cost_function.clone(),
+            state: mpc_problem.current_state.clone(),
+            set_point: mpc_problem.setpoint.clone(),
+            dt: mpc_problem.sample_period,
+        };
+
+        let root_cost =
+            (root_dynamics.state_cost_function)(&root_dynamics.state, &root_dynamics.set_point);
+
         let dynamics_tree = Tree::with_capacity(
-            (
-                DynamicsProblem {
-                    dynamics_function: mpc_problem.dynamics_function.clone(),
-                    state_cost_function: mpc_problem.state_cost_function.clone(),
-                    state: mpc_problem.current_state.clone(),
-                    set_point: mpc_problem.setpoint.clone(),
-                    dt: mpc_problem.sample_period,
-                },
-                Array1::<f64>::zeros(0),
-            ),
+            (root_dynamics, Array1::<f64>::zeros(0), root_cost),
             target_size * 2,
         );
 
@@ -74,6 +112,7 @@ impl DynamicsOptimizer {
             orphans: vec![],
             solution_nodes: vec![],
             state_cost_epsilon: solution_cost_tolerance,
+            leaves: BTreeSet::new(),
         }
     }
 
@@ -145,9 +184,11 @@ impl DynamicsOptimizer {
             n1_state_cost.total_cmp(&n2_state_cost)
         });
 
-        let best_leaf_ids: Vec<NodeId> = leaves
-            .into_iter()
-            .filter_map(|node_ref| {
+        let best_leaf_ids: Vec<NodeId> = self
+            .leaves
+            .iter()
+            .filter_map(|NodeAndCost(node_id, _cost)| {
+                let node_ref = self.dynamics_tree.get(*node_id).unwrap();
                 let depth = Self::depth(node_ref);
                 if depth < self.max_depth {
                     Some(node_ref.id())
@@ -171,7 +212,7 @@ impl DynamicsOptimizer {
             self.state_cost_epsilon,
         )
         .map(|(cost, dynamics_problem, inputs)| {
-            let id = self.add_node(dynamics_problem.clone(), inputs);
+            let id = self.add_node(dynamics_problem.clone(), inputs, cost);
             if cost < self.state_cost_epsilon {
                 println!("Solution found at {}", dynamics_problem.state);
                 self.solution_nodes.push(id);
@@ -179,6 +220,10 @@ impl DynamicsOptimizer {
             id
         })
         .collect();
+
+        // now remove node_id from leaves since it has children
+        let this_cost = self.dynamics_tree.get(node_id).unwrap().value().2;
+        self.leaves.remove(&NodeAndCost(node_id, this_cost));
 
         ids.into_iter().for_each(|id| {
             self.dynamics_tree.get_mut(node_id).unwrap().append_id(id);
@@ -292,13 +337,16 @@ impl DynamicsOptimizer {
         next_states.into_iter().take(branch_factor)
     }
 
-    fn add_node(&mut self, dynamics: DynamicsProblem, inputs: Array1<f64>) -> NodeId {
+    fn add_node(&mut self, dynamics: DynamicsProblem, inputs: Array1<f64>, cost: f64) -> NodeId {
         // either overwrite an orphan or add a new
         if let Some(node_id) = self.orphans.pop() {
-            *self.dynamics_tree.get_mut(node_id).unwrap().value() = (dynamics, inputs);
+            *self.dynamics_tree.get_mut(node_id).unwrap().value() = (dynamics, inputs, cost);
+            self.leaves.insert(NodeAndCost(node_id, cost));
             node_id
         } else {
-            self.dynamics_tree.orphan((dynamics, inputs)).id()
+            let id = self.dynamics_tree.orphan((dynamics, inputs, cost)).id();
+            self.leaves.insert(NodeAndCost(id, cost));
+            id
         }
     }
 
@@ -328,9 +376,21 @@ impl DynamicsOptimizer {
         });
     }
 
-    fn prune_node(&mut self, node: NodeId) {
-        self.dynamics_tree.get_mut(node).unwrap().detach();
-        self.orphans.push(node);
+    fn prune_node(&mut self, node_id: NodeId) {
+        let mut node = self.dynamics_tree.get_mut(node_id).unwrap();
+        // this may make the parent a leaf, store the parent ID for later
+        let Some(parent_id) = node.parent().map(|parent_node| parent_node.id()) else {
+            panic!("Trying to prune an orphan. This indicates a bug");
+        };
+
+        self.leaves.remove(&NodeAndCost(node_id, node.value().2));
+        node.detach();
+        self.orphans.push(node_id);
+        let parent = self.dynamics_tree.get(parent_id).unwrap();
+        if !parent.has_children() {
+            // it's now a leaf, add it
+            self.leaves.insert(NodeAndCost(parent_id, parent.value().2));
+        }
     }
 
     fn leaves(&self) -> impl Iterator<Item = NodeRef<'_, DynamicsNodeType>> {
@@ -545,7 +605,7 @@ mod test {
         assert!(dynamics_optimizer.solutions.len() > 0);
 
         let solution_trajectory =
-            mpc_problem.calculate_trajectory(&dynamics_optimizer.solutions[0].0);
+            mpc_problem.calculate_trajectory(dynamics_optimizer.solutions[0].0.view());
 
         let last_point = solution_trajectory.last().unwrap();
 
@@ -565,7 +625,7 @@ mod test {
 
         let optimal_inputs = res.state.best_param.unwrap();
         let (mpc_problem, _) = get_simple_optimizer(goal.clone());
-        let solution_trajectory = mpc_problem.calculate_trajectory(&optimal_inputs);
+        let solution_trajectory = mpc_problem.calculate_trajectory(optimal_inputs.view());
 
         let last_point = solution_trajectory.last().unwrap();
 
