@@ -52,6 +52,28 @@ impl DynamicsSubProblem for MPCProblem {
 }
 
 impl MPCProblem {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        setpoint: Array1<f64>,
+        current_state: Array1<f64>,
+        sample_period: Duration,
+        lookahead_duration: Duration,
+        dynamics_function: DynamicsFunction,
+        input_size: usize,
+        state_cost_function: Arc<StateCostFunction>,
+        dynamics_cost_function: Box<DynamicsCostFunction>,
+    ) -> Self {
+        Self {
+            setpoint: Arc::new(setpoint),
+            current_state,
+            sample_period,
+            lookahead_duration,
+            dynamics_function,
+            input_size,
+            state_cost_function,
+            dynamics_cost_function,
+        }
+    }
     pub fn calculate_trajectory(&self, inputs: &Array1<f64>) -> Array1<Array1<f64>> {
         let mut current_state = self.current_state.clone();
 

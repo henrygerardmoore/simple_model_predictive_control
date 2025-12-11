@@ -6,7 +6,7 @@ use std::{
 use argmin::{
     core::{Error, Executor, IterState, KV, Problem, Solver, TerminationReason, TerminationStatus},
     kv,
-    solver::{neldermead::NelderMead, newton::Newton},
+    solver::{linesearch::HagerZhangLineSearch, neldermead::NelderMead, quasinewton::LBFGS},
 };
 use ego_tree::{NodeId, NodeRef, Tree};
 use ndarray::Array1;
@@ -79,6 +79,13 @@ impl DynamicsOptimizer {
         depth
     }
 
+    fn calculate_solutions(&mut self, mpc_problem: &MPCProblem) {
+        while let Some(solution_node) = self.solution_nodes.pop() {
+            self.solutions
+                .push(self.get_inputs_and_trajectory_cost_to_node(mpc_problem, solution_node));
+        }
+    }
+
     // traverse up the tree to the root, collecting all the inputs into one and then calculating the trajectory cost from that
     fn get_inputs_and_trajectory_cost_to_node(
         &self,
@@ -94,11 +101,17 @@ impl DynamicsOptimizer {
 
             node = node_ref.parent();
         }
-        inputs.reverse();
+        // the root node's inputs are empty and meaningless, don't include them
+        let num_inputs = inputs.len() - 1;
         // flatten inputs
         let inputs = Array1::from_iter(
             inputs
                 .iter()
+                // the root node's inputs are the last item in the iter
+                .take(num_inputs)
+                // we want them in chronological order, not leaf->root order
+                .rev()
+                // other things use the input as one large 1D array, return it as such
                 .flat_map(|input_chunk| input_chunk.iter().cloned()),
         );
         let trajectory_cost =
@@ -123,7 +136,6 @@ impl DynamicsOptimizer {
         let best_leaf_ids: Vec<NodeId> = leaves
             .into_iter()
             .rev()
-            .take(num_nodes)
             .filter_map(|node_ref| {
                 let depth = Self::depth(node_ref);
                 if depth < self.max_depth {
@@ -132,6 +144,7 @@ impl DynamicsOptimizer {
                     None
                 }
             })
+            .take(num_nodes)
             .collect();
 
         best_leaf_ids.into_iter().for_each(|id_to_grow| {
@@ -167,11 +180,12 @@ impl DynamicsOptimizer {
         parent_dynamics: &DynamicsProblem,
     ) -> impl Iterator<Item = (f64, DynamicsProblem, Array1<f64>)> {
         // Set up solver
-        let newton_solver: Newton<f64> = Newton::new();
+        let linesearch = HagerZhangLineSearch::new();
+        let initial_solver = LBFGS::new(linesearch, 7);
 
         let middle_input = (input_min_max.0.clone() + input_min_max.1.clone()) / 2.;
         // Run solver
-        let res = Executor::new(parent_dynamics.clone(), newton_solver)
+        let res = Executor::new(parent_dynamics.clone(), initial_solver)
             .configure(|state| state.param(middle_input.clone()).max_iters(10))
             .run()
             .unwrap();
@@ -360,10 +374,7 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
             TreeOptimizationAction::Prune
         };
 
-        while let Some(solution_node) = self.solution_nodes.pop() {
-            self.solutions
-                .push(self.get_inputs_and_trajectory_cost_to_node(mpc_problem, solution_node));
-        }
+        self.calculate_solutions(mpc_problem);
 
         Ok((state, Some(kv!("action" => format!("{action}");))))
     }
@@ -383,8 +394,69 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
 
 #[cfg(test)]
 mod test {
+    use std::{sync::Arc, time::Duration};
+
+    use ndarray::{Array1, ArrayView1, array};
+
+    use crate::{
+        dynamics_optimizer::DynamicsOptimizer, dynamics_problem::DynamicsFunction,
+        prelude::MPCProblem,
+    };
+
+    const DT: f64 = 0.1;
+    const LOOKAHEAD: f64 = 1.0;
+    const INITIAL_POS: f64 = 1.0;
+    const INITIAL_VEL: f64 = 0.0;
+
+    // input is x acceleration, state is (x, vx)
+    fn simple_continuous_dynamics(state: &Array1<f64>, input: ArrayView1<f64>) -> Array1<f64> {
+        array![state[1], input[0]]
+    }
+
+    // simple L2 distance to setpoint
+    fn simple_state_cost_function(state: &Array1<f64>, setpoint: &Array1<f64>) -> f64 {
+        state
+            .iter()
+            .zip(setpoint.iter())
+            .fold(0., |acc, x| acc + (x.0 - x.1).powi(2))
+    }
+
+    // the sum of input^2 over all the inputs is used to discriminate solutions that made it to the goal
+    fn simple_dynamics_cost_function(
+        _state: &Array1<f64>,
+        input: ArrayView1<f64>,
+        _setpoint: &Array1<f64>,
+    ) -> f64 {
+        input[0].powi(2)
+    }
+
+    fn get_simple_optimizer(goal: Array1<f64>) -> (MPCProblem, DynamicsOptimizer) {
+        let mpc_problem = MPCProblem {
+            setpoint: Arc::new(goal),
+            current_state: array![INITIAL_POS, INITIAL_VEL],
+            sample_period: Duration::from_secs_f64(DT),
+            lookahead_duration: Duration::from_secs_f64(LOOKAHEAD),
+            dynamics_function: DynamicsFunction::Continuous(Arc::new(&simple_continuous_dynamics)),
+            input_size: 1,
+            state_cost_function: Arc::new(&simple_state_cost_function),
+            dynamics_cost_function: Box::new(&simple_dynamics_cost_function),
+        };
+        let dynamics_optimizer = DynamicsOptimizer::new(array![-1.], array![1.], &mpc_problem);
+        (mpc_problem, dynamics_optimizer)
+    }
+
     #[test]
-    fn test_grow_node_finds_goal() {}
+    fn test_grow_node_finds_goal() {
+        let optimal_force = 3.14159265358979;
+        let goal = array![
+            INITIAL_POS + 0.5 * optimal_force * DT.powi(2),
+            INITIAL_VEL + optimal_force * DT
+        ];
+        let (mpc_problem, mut dynamics_optimizer) = get_simple_optimizer(goal);
+        dynamics_optimizer.grow_nodes(1);
+        dynamics_optimizer.calculate_solutions(&mpc_problem);
+        assert!(dynamics_optimizer.solutions.len() > 0);
+    }
 
     #[test]
     fn test_prune_nodes() {}
