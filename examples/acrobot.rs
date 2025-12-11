@@ -25,7 +25,9 @@ const INPUT_SIZE: usize = 1;
 // timestep (s)
 const DT: f64 = 0.3; // (s)
 
-const PLOT_SUBDIVISION: usize = 30;
+const CONTROLLER_TIME_LIMIT: f64 = 0.1;
+
+const PLOT_SUBDIVISION: usize = 1;
 
 // lookahead time (s)
 const LOOKAHEAD: f64 = 10.0;
@@ -205,15 +207,20 @@ fn state_cost(state: &Array1<f64>, _setpoint: &Array1<f64>) -> f64 {
     let pe_diff = (potential_energy - target_energy).abs();
 
     // punish excess kinetic energy and not being at target PE
-    (kinetic_energy - pe_diff).max(0.) + pe_diff
+    (kinetic_energy - pe_diff).max(0.) + pe_diff + 0.01 * kinetic_energy.powi(2)
 }
 
 fn simple_dynamics_cost_function(
-    _state: &Array1<Array1<f64>>,
+    states: &Array1<Array1<f64>>,
     inputs: &Array1<f64>,
-    _setpoint: &Array1<f64>,
+    setpoint: &Array1<f64>,
 ) -> f64 {
-    inputs.map(|input| input.abs()).sum()
+    let n = inputs.len() as f64;
+    // normalize but add 1 to penalize short solutions
+    (inputs.map(|input| input.abs()).sum()
+        + states.map(|state| state_cost(state, setpoint)).sum()
+        + 1.)
+        / n
 }
 
 fn get_mpc_problem(
@@ -236,7 +243,7 @@ fn get_mpc_problem(
         &mpc_problem,
         1e-2,
         DynamicsOptimizerSettings {
-            time_limit: Some(Duration::from_secs_f32(0.01)),
+            time_limit: Some(Duration::from_secs_f64(CONTROLLER_TIME_LIMIT)),
             ..Default::default()
         },
     );
@@ -360,6 +367,9 @@ fn subdivide_trajectory(
     subdivision: usize,
 ) -> Array1<Array1<f64>> {
     assert!(subdivision > 0, "Cannot subdivide 0 times");
+    if subdivision <= 1 {
+        return trajectory.to_owned();
+    }
     // interpolate between each trajectory point
     // we will add `subdivision` - 1 equispaced points between each pair
     let interpoland_step = 1. / (subdivision as f64);
@@ -395,19 +405,31 @@ pub fn main() {
     println!("Running acrobot MPC simulation...");
     let now = Instant::now();
 
-    let initial_state = array![-PI / 2., 0., 0., 0.];
+    let mut initial_state = array![-PI / 2., 0., 0., 0.];
+    let mut trajectory = array![initial_state.clone()];
+    let mut line_segments = vec![];
 
-    // how many lookahead periods we should do
     let goal = Array1::from_iter(GOAL.into_iter());
+    let num_chunks = (1. / CONTROLLER_TIME_LIMIT).ceil() as usize;
+    for _ in 0..num_chunks {
+        let (mut mpc_problem, solver) = get_mpc_problem(initial_state, goal.clone());
+        // Run solver
+        let res = Executor::new(mpc_problem, solver).run().unwrap();
+        let mut this_segments = res.solver.get_line_segments(0, 1);
+        line_segments.append(&mut this_segments);
+        let optimized_inputs = res.state.best_param.unwrap();
 
-    let (mut mpc_problem, solver) = get_mpc_problem(initial_state, goal.clone());
-    // Run solver
-    let res = Executor::new(mpc_problem, solver).run().unwrap();
+        mpc_problem = res.problem.problem.unwrap();
+        let this_trajectory = mpc_problem.calculate_trajectory(optimized_inputs.view());
+        trajectory
+            .append(ndarray::Axis(0), this_trajectory.view())
+            .unwrap();
+        initial_state = this_trajectory.last().unwrap().clone();
+    }
 
     let elapsed = now.elapsed();
     println!(
-        "MPC simulation of {:.2} seconds complete in {:.2} seconds, now plotting...",
-        LOOKAHEAD,
+        "MPC simulation complete in {:.2} seconds, now plotting...",
         elapsed.as_secs_f64()
     );
 
@@ -419,14 +441,9 @@ pub fn main() {
 
     let now = Instant::now();
 
-    plot_tree(res.solver.get_line_segments(0, 1)).unwrap();
+    plot_tree(line_segments).unwrap();
 
     // plot with subdivisions for smoother visualizations
-    let optimized_inputs = res.state.best_param.unwrap();
-
-    mpc_problem = res.problem.problem.unwrap();
-    let trajectory = mpc_problem.calculate_trajectory(optimized_inputs.view());
-
     let mut trajectory = subdivide_trajectory(trajectory.view(), PLOT_SUBDIVISION);
     trajectory_to_plot_format(&mut trajectory);
     plot(trajectory).unwrap();
