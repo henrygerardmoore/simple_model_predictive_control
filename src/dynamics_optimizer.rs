@@ -94,7 +94,7 @@ impl Default for DynamicsOptimizerSettings {
         Self {
             branching_factor: 4,
             nelder_mead_iters: 1000,
-            particle_count: 1000,
+            particle_count: 100,
             target_size_override: None,
             iter_grow_number: 10,
             iter_prune_number: 10,
@@ -152,9 +152,10 @@ impl DynamicsOptimizer {
         .ceil() as usize;
         let input_size = mpc_problem.input_size;
 
+        // TODO: improve pruning strategy to avoid needing a gigantic target size
         let target_size = settings
             .target_size_override
-            .unwrap_or(max_depth * input_size * 2000);
+            .unwrap_or(max_depth * input_size * 20000);
 
         let root_dynamics = DynamicsProblem {
             dynamics_function: mpc_problem.dynamics_function.clone(),
