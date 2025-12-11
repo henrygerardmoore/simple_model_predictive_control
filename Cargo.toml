@@ -12,6 +12,7 @@ keywords = ["mpc","model-predictive-control","model-predictive","argmin","nonlin
 argmin = {version="0.11.0", features=["rayon"]}
 argmin-math = {version = "0.5.1", features = ["ndarray_latest"]}
 argmin-observer-slog = "0.2.0"
+ego-tree = "0.10.0"
 env_logger = "0.11.8"
 finitediff = {version="0.2.0", features = ["ndarray"]}
 log = "0.4.28"

@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use std::time::Duration;
 
 use argmin::core::Executor;
@@ -56,21 +58,21 @@ fn state_cost(
         + 0.01 * distance_cost(&zero_vel_state, setpoint)
 }
 
-fn get_mpc_problem(
-    initial_conditions: [f64; STATE_SIZE],
-    setpoint: [f64; STATE_SIZE],
-) -> MPCProblem<STATE_SIZE, INPUT_SIZE> {
-    MPCProblemBuilder::<STATE_SIZE, INPUT_SIZE>::new()
-        .dynamics_function(DynamicsFunction::Continuous(Box::new(&dynamics_function)))
-        .terminal_cost(&distance_cost)
-        .state_cost(&state_cost)
-        .lookahead_duration(Duration::from_secs_f64(LOOKAHEAD))
-        .sample_period(Duration::from_secs_f64(DT))
-        .setpoint(setpoint)
-        .initial_conditions(initial_conditions)
-        .build()
-        .unwrap()
-}
+// fn get_mpc_problem(
+//     initial_conditions: [f64; STATE_SIZE],
+//     setpoint: [f64; STATE_SIZE],
+// ) -> MPCProblem<STATE_SIZE, INPUT_SIZE> {
+//     MPCProblemBuilder::<STATE_SIZE, INPUT_SIZE>::new()
+//         .dynamics_function(DynamicsFunction::Continuous(Box::new(&dynamics_function)))
+//         .terminal_cost(&distance_cost)
+//         .state_cost(&state_cost)
+//         .lookahead_duration(Duration::from_secs_f64(LOOKAHEAD))
+//         .sample_period(Duration::from_secs_f64(DT))
+//         .setpoint(setpoint)
+//         .initial_conditions(initial_conditions)
+//         .build()
+//         .unwrap()
+// }
 
 fn plot(trajectory: Array1<[f64; STATE_SIZE]>) -> Result<(), Box<dyn std::error::Error>> {
     let cartesian_trajectory: Vec<(f64, f64)> = trajectory
@@ -125,43 +127,43 @@ const OUT_FILE_NAME: &str = "simple_continuous_release.gif";
 // see plotters animation example for reference:
 // https://github.com/plotters-rs/plotters/blob/master/plotters/examples/animation.rs
 pub fn main() {
-    println!("Running simple continuous MPC simulation...");
-    let mut trajectory = Array1::<[f64; 4]>::default(0);
+    // println!("Running simple continuous MPC simulation...");
+    // let mut trajectory = Array1::<[f64; 4]>::default(0);
 
-    let mut initial_state = [0.; STATE_SIZE];
+    // let mut initial_state = [0.; STATE_SIZE];
 
-    // how many lookahead periods we should do
-    let num_chunks = 10;
+    // // how many lookahead periods we should do
+    // let num_chunks = 10;
 
-    for _ in 0..num_chunks {
-        let mpc_problem = get_mpc_problem(initial_state, GOAL);
+    // for _ in 0..num_chunks {
+    //     let mpc_problem = get_mpc_problem(initial_state, GOAL);
 
-        let solver = NelderMead::new(mpc_problem.parameter_vector(1.));
+    //     let solver = NelderMead::new(mpc_problem.parameter_vector(1.));
 
-        // Run solver
-        // plotting is actually the slowest part when in debug mode, but solving is also much slower of course
-        #[cfg(debug_assertions)]
-        let res = Executor::new(mpc_problem, solver)
-            .configure(|state| state.max_iters(1000))
-            .run()
-            .unwrap();
-        #[cfg(not(debug_assertions))]
-        let res = Executor::new(mpc_problem, solver)
-            .configure(|state| state.max_iters(100000))
-            .run()
-            .unwrap();
+    //     // Run solver
+    //     // plotting is actually the slowest part when in debug mode, but solving is also much slower of course
+    //     #[cfg(debug_assertions)]
+    //     let res = Executor::new(mpc_problem, solver)
+    //         .configure(|state| state.max_iters(1000))
+    //         .run()
+    //         .unwrap();
+    //     #[cfg(not(debug_assertions))]
+    //     let res = Executor::new(mpc_problem, solver)
+    //         .configure(|state| state.max_iters(100000))
+    //         .run()
+    //         .unwrap();
 
-        let mpc_problem = get_mpc_problem(initial_state, GOAL);
+    //     let mpc_problem = get_mpc_problem(initial_state, GOAL);
 
-        // update start position and append to overall trajectory
-        let this_trajectory =
-            mpc_problem.calculate_trajectory(&res.state.best_param.unwrap().view());
-        trajectory
-            .append(ndarray::Axis(0), this_trajectory.view())
-            .unwrap();
-        initial_state = *this_trajectory.last().unwrap();
-    }
+    //     // update start position and append to overall trajectory
+    //     let this_trajectory =
+    //         mpc_problem.calculate_trajectory(&res.state.best_param.unwrap().view());
+    //     trajectory
+    //         .append(ndarray::Axis(0), this_trajectory.view())
+    //         .unwrap();
+    //     initial_state = *this_trajectory.last().unwrap();
+    // }
 
-    println!("MPC simulation complete, now plotting...");
-    plot(trajectory).unwrap();
+    // println!("MPC simulation complete, now plotting...");
+    // plot(trajectory).unwrap();
 }

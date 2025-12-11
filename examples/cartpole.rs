@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use std::{
     f64::consts::{PI, TAU},
     time::{Duration, Instant},
@@ -131,21 +133,21 @@ fn state_cost(
     // don't penalize commands in this case to prefer a better solution
 }
 
-fn get_mpc_problem(
-    initial_conditions: [f64; STATE_SIZE],
-    setpoint: [f64; STATE_SIZE],
-) -> MPCProblem<STATE_SIZE, INPUT_SIZE> {
-    MPCProblemBuilder::<STATE_SIZE, INPUT_SIZE>::new()
-        .dynamics_function(DynamicsFunction::Discrete(Box::new(&dynamics_function)))
-        .state_cost(&state_cost)
-        .terminal_cost(&terminal_cost)
-        .lookahead_duration(Duration::from_secs_f64(LOOKAHEAD))
-        .sample_period(Duration::from_secs_f64(DT))
-        .setpoint(setpoint)
-        .initial_conditions(initial_conditions)
-        .build()
-        .unwrap()
-}
+// fn get_mpc_problem(
+//     initial_conditions: [f64; STATE_SIZE],
+//     setpoint: [f64; STATE_SIZE],
+// ) -> MPCProblem<STATE_SIZE, INPUT_SIZE> {
+//     MPCProblemBuilder::<STATE_SIZE, INPUT_SIZE>::new()
+//         .dynamics_function(DynamicsFunction::Discrete(Box::new(&dynamics_function)))
+//         .state_cost(&state_cost)
+//         .terminal_cost(&terminal_cost)
+//         .lookahead_duration(Duration::from_secs_f64(LOOKAHEAD))
+//         .sample_period(Duration::from_secs_f64(DT))
+//         .setpoint(setpoint)
+//         .initial_conditions(initial_conditions)
+//         .build()
+//         .unwrap()
+// }
 
 fn plot(trajectory: Array1<[f64; STATE_SIZE]>) -> Result<(), Box<dyn std::error::Error>> {
     let now = Instant::now();
@@ -232,51 +234,51 @@ const OUT_FILE_NAME: &str = "cartpole_release.gif";
 // see plotters animation example for reference:
 // https://github.com/plotters-rs/plotters/blob/master/plotters/examples/animation.rs
 pub fn main() {
-    println!("Running cartpole MPC simulation...");
-    let now = Instant::now();
-    let mut trajectory = Array1::<[f64; 4]>::default(0);
+    // println!("Running cartpole MPC simulation...");
+    // let now = Instant::now();
+    // let mut trajectory = Array1::<[f64; 4]>::default(0);
 
-    let mut initial_state = [0., 0., 0., 0.];
+    // let mut initial_state = [0., 0., 0., 0.];
 
-    // how many lookahead periods we should do
-    let num_chunks = 5;
+    // // how many lookahead periods we should do
+    // let num_chunks = 5;
 
-    for _ in 0..num_chunks {
-        let mpc_problem = get_mpc_problem(initial_state, GOAL);
+    // for _ in 0..num_chunks {
+    //     let mpc_problem = get_mpc_problem(initial_state, GOAL);
 
-        let solver = NelderMead::new(mpc_problem.parameter_vector(1.));
-        // Run solver
-        // plotting is actually the slowest part when in debug mode, but solving is also much slower of course
-        #[cfg(debug_assertions)]
-        let res = Executor::new(mpc_problem, solver)
-            .configure(|state| state.max_iters(1000))
-            .run()
-            .unwrap();
-        #[cfg(not(debug_assertions))]
-        let res = Executor::new(mpc_problem, solver)
-            .configure(|state| state.max_iters(10000))
-            .run()
-            .unwrap();
+    //     let solver = NelderMead::new(mpc_problem.parameter_vector(1.));
+    //     // Run solver
+    //     // plotting is actually the slowest part when in debug mode, but solving is also much slower of course
+    //     #[cfg(debug_assertions)]
+    //     let res = Executor::new(mpc_problem, solver)
+    //         .configure(|state| state.max_iters(1000))
+    //         .run()
+    //         .unwrap();
+    //     #[cfg(not(debug_assertions))]
+    //     let res = Executor::new(mpc_problem, solver)
+    //         .configure(|state| state.max_iters(10000))
+    //         .run()
+    //         .unwrap();
 
-        let mpc_problem = get_mpc_problem(initial_state, GOAL);
+    //     let mpc_problem = get_mpc_problem(initial_state, GOAL);
 
-        // update start position and append to overall trajectory
-        let this_trajectory =
-            mpc_problem.calculate_trajectory(&res.state.best_param.unwrap().view());
-        // let this_trajectory = mpc_problem.calculate_trajectory(&Array1::from_vec(vec![10.; n]).view());
-        trajectory
-            .append(ndarray::Axis(0), this_trajectory.view())
-            .unwrap();
-        initial_state = *this_trajectory.last().unwrap();
-    }
+    //     // update start position and append to overall trajectory
+    //     let this_trajectory =
+    //         mpc_problem.calculate_trajectory(&res.state.best_param.unwrap().view());
+    //     // let this_trajectory = mpc_problem.calculate_trajectory(&Array1::from_vec(vec![10.; n]).view());
+    //     trajectory
+    //         .append(ndarray::Axis(0), this_trajectory.view())
+    //         .unwrap();
+    //     initial_state = *this_trajectory.last().unwrap();
+    // }
 
-    trajectory_to_plot_format(&mut trajectory);
+    // trajectory_to_plot_format(&mut trajectory);
 
-    let elapsed = now.elapsed();
-    println!(
-        "MPC simulation of {:.1} seconds complete in {:.1} seconds, now plotting...",
-        (num_chunks as f64) * LOOKAHEAD,
-        elapsed.as_secs_f64()
-    );
-    plot(trajectory).unwrap();
+    // let elapsed = now.elapsed();
+    // println!(
+    //     "MPC simulation of {:.1} seconds complete in {:.1} seconds, now plotting...",
+    //     (num_chunks as f64) * LOOKAHEAD,
+    //     elapsed.as_secs_f64()
+    // );
+    // plot(trajectory).unwrap();
 }

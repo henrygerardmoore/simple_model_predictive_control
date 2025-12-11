@@ -531,6 +531,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ego-tree"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2972feb8dffe7bc8c5463b1dacda1b0dfbed3710e50f977d965429692d74cd8"
+
+[[package]]
 name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1840,6 +1846,7 @@ dependencies = [
  "argmin",
  "argmin-math",
  "argmin-observer-slog",
+ "ego-tree",
  "env_logger",
  "finitediff",
  "log",

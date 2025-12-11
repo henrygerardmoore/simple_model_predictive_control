@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use std::{
     f64::consts::{PI, TAU},
     time::{Duration, Instant},
@@ -201,20 +203,20 @@ fn state_cost(
     (kinetic_energy - pe_diff).max(0.) + pe_diff
 }
 
-fn get_mpc_problem(
-    initial_conditions: [f64; STATE_SIZE],
-    setpoint: [f64; STATE_SIZE],
-) -> MPCProblem<STATE_SIZE, INPUT_SIZE> {
-    MPCProblemBuilder::<STATE_SIZE, INPUT_SIZE>::new()
-        .dynamics_function(DynamicsFunction::Discrete(Box::new(&dynamics_function)))
-        .state_cost(&state_cost)
-        .lookahead_duration(Duration::from_secs_f64(LOOKAHEAD))
-        .sample_period(Duration::from_secs_f64(DT))
-        .setpoint(setpoint)
-        .initial_conditions(initial_conditions)
-        .build()
-        .unwrap()
-}
+// fn get_mpc_problem(
+//     initial_conditions: [f64; STATE_SIZE],
+//     setpoint: [f64; STATE_SIZE],
+// ) -> MPCProblem<STATE_SIZE, INPUT_SIZE> {
+//     MPCProblemBuilder::<STATE_SIZE, INPUT_SIZE>::new()
+//         .dynamics_function(DynamicsFunction::Discrete(Box::new(&dynamics_function)))
+//         .state_cost(&state_cost)
+//         .lookahead_duration(Duration::from_secs_f64(LOOKAHEAD))
+//         .sample_period(Duration::from_secs_f64(DT))
+//         .setpoint(setpoint)
+//         .initial_conditions(initial_conditions)
+//         .build()
+//         .unwrap()
+// }
 
 fn plot(trajectory: Array1<[f64; STATE_SIZE]>) -> Result<(), Box<dyn std::error::Error>> {
     let now = Instant::now();
@@ -293,98 +295,98 @@ const OUT_FILE_NAME: &str = "acrobot_release.gif";
 // see plotters animation example for reference:
 // https://github.com/plotters-rs/plotters/blob/master/plotters/examples/animation.rs
 pub fn main() {
-    println!("Running acrobot MPC simulation...");
-    let now = Instant::now();
-    let mut trajectory = Array1::<[f64; 4]>::default(0);
+    // println!("Running acrobot MPC simulation...");
+    // let now = Instant::now();
+    // let mut trajectory = Array1::<[f64; 4]>::default(0);
 
-    let mut state = INITIAL_STATE;
+    // let mut state = INITIAL_STATE;
 
-    // how many lookahead periods we should do
-    let target_time = 25.;
-    let num_chunks = 2 * (target_time / LOOKAHEAD).ceil() as usize;
-    let n = (LOOKAHEAD / DT).ceil() as usize;
-    let n_half = (LOOKAHEAD / 2. / DT).ceil() as usize;
+    // // how many lookahead periods we should do
+    // let target_time = 25.;
+    // let num_chunks = 2 * (target_time / LOOKAHEAD).ceil() as usize;
+    // let n = (LOOKAHEAD / DT).ceil() as usize;
+    // let n_half = (LOOKAHEAD / 2. / DT).ceil() as usize;
 
-    let min = Array1::ones(n * INPUT_SIZE) * -INPUT_MAX;
-    let max = Array1::ones(n * INPUT_SIZE) * INPUT_MAX;
-    let linesearch = HagerZhangLineSearch::new();
+    // let min = Array1::ones(n * INPUT_SIZE) * -INPUT_MAX;
+    // let max = Array1::ones(n * INPUT_SIZE) * INPUT_MAX;
+    // let linesearch = HagerZhangLineSearch::new();
 
-    for index in 0..num_chunks {
-        let mpc_problem = get_mpc_problem(state, GOAL);
+    // for index in 0..num_chunks {
+    //     let mpc_problem = get_mpc_problem(state, GOAL);
 
-        let pso_warmstart_solver = ParticleSwarm::new((min.clone(), max.clone()), 10000);
-        let pso_res = Executor::new(mpc_problem, pso_warmstart_solver)
-            .configure(|state| state.max_iters(10))
-            .run()
-            .unwrap();
+    //     let pso_warmstart_solver = ParticleSwarm::new((min.clone(), max.clone()), 10000);
+    //     let pso_res = Executor::new(mpc_problem, pso_warmstart_solver)
+    //         .configure(|state| state.max_iters(10))
+    //         .run()
+    //         .unwrap();
 
-        // use the best particle and n others for the nelder-mead simplex
-        let mpc_problem = get_mpc_problem(state, GOAL);
+    //     // use the best particle and n others for the nelder-mead simplex
+    //     let mpc_problem = get_mpc_problem(state, GOAL);
 
-        // sort them lowest to highest
-        let mut sorted_particles = pso_res
-            .state
-            .get_population()
-            .unwrap()
-            .iter()
-            .collect::<Vec<&Particle<Array1<f64>, f64>>>();
-        sorted_particles.sort_by(|&particle1, particle2| particle1.cost.total_cmp(&particle2.cost));
+    //     // sort them lowest to highest
+    //     let mut sorted_particles = pso_res
+    //         .state
+    //         .get_population()
+    //         .unwrap()
+    //         .iter()
+    //         .collect::<Vec<&Particle<Array1<f64>, f64>>>();
+    //     sorted_particles.sort_by(|&particle1, particle2| particle1.cost.total_cmp(&particle2.cost));
 
-        // take the n+1 lowest-cost particles and use them as the simplex
-        let parameters: Vec<Array1<f64>> = sorted_particles
-            .iter()
-            .take(n + 1)
-            .map(|particle| particle.position.clone())
-            .collect();
+    //     // take the n+1 lowest-cost particles and use them as the simplex
+    //     let parameters: Vec<Array1<f64>> = sorted_particles
+    //         .iter()
+    //         .take(n + 1)
+    //         .map(|particle| particle.position.clone())
+    //         .collect();
 
-        let nm_solver = NelderMead::new(parameters);
-        let nm_res = Executor::new(mpc_problem, nm_solver)
-            .configure(|state| state.max_iters(10000))
-            .run()
-            .unwrap();
+    //     let nm_solver = NelderMead::new(parameters);
+    //     let nm_res = Executor::new(mpc_problem, nm_solver)
+    //         .configure(|state| state.max_iters(10000))
+    //         .run()
+    //         .unwrap();
 
-        let best_result = nm_res.state.best_param.unwrap();
+    //     let best_result = nm_res.state.best_param.unwrap();
 
-        let mpc_problem = get_mpc_problem(state, GOAL);
+    //     let mpc_problem = get_mpc_problem(state, GOAL);
 
-        let annealing_solver = SimulatedAnnealing::new(30.).unwrap();
-        // Run solver
-        let annealing_res = Executor::new(mpc_problem, annealing_solver)
-            .configure(|state| state.param(best_result).max_iters(1000))
-            .run()
-            .unwrap();
+    //     let annealing_solver = SimulatedAnnealing::new(30.).unwrap();
+    //     // Run solver
+    //     let annealing_res = Executor::new(mpc_problem, annealing_solver)
+    //         .configure(|state| state.param(best_result).max_iters(1000))
+    //         .run()
+    //         .unwrap();
 
-        let best_result = annealing_res.state.best_param.unwrap();
+    //     let best_result = annealing_res.state.best_param.unwrap();
 
-        let mpc_problem = get_mpc_problem(state, GOAL);
+    //     let mpc_problem = get_mpc_problem(state, GOAL);
 
-        let lbfgs_solver = LBFGS::new(linesearch.clone(), 7);
-        // Run solver
-        let lbfgs_res = Executor::new(mpc_problem, lbfgs_solver)
-            .configure(|state| state.param(best_result).max_iters(1000))
-            .run()
-            .unwrap();
+    //     let lbfgs_solver = LBFGS::new(linesearch.clone(), 7);
+    //     // Run solver
+    //     let lbfgs_res = Executor::new(mpc_problem, lbfgs_solver)
+    //         .configure(|state| state.param(best_result).max_iters(1000))
+    //         .run()
+    //         .unwrap();
 
-        let mpc_problem = get_mpc_problem(state, GOAL);
+    //     let mpc_problem = get_mpc_problem(state, GOAL);
 
-        // update start position and append to overall trajectory
-        // only use first half of inputs
-        let inputs = lbfgs_res.state.best_param.unwrap();
-        let this_trajectory = mpc_problem.calculate_trajectory(&inputs.slice(s![..n_half]));
-        trajectory
-            .append(ndarray::Axis(0), this_trajectory.view())
-            .unwrap();
-        state = *this_trajectory.last().unwrap();
-        println!("Chunk {}/{} complete", index + 1, num_chunks);
-    }
+    //     // update start position and append to overall trajectory
+    //     // only use first half of inputs
+    //     let inputs = lbfgs_res.state.best_param.unwrap();
+    //     let this_trajectory = mpc_problem.calculate_trajectory(&inputs.slice(s![..n_half]));
+    //     trajectory
+    //         .append(ndarray::Axis(0), this_trajectory.view())
+    //         .unwrap();
+    //     state = *this_trajectory.last().unwrap();
+    //     println!("Chunk {}/{} complete", index + 1, num_chunks);
+    // }
 
-    trajectory_to_plot_format(&mut trajectory);
+    // trajectory_to_plot_format(&mut trajectory);
 
-    let elapsed = now.elapsed();
-    println!(
-        "MPC simulation of {:.1} seconds complete in {:.1} seconds, now plotting...",
-        (num_chunks as f64) * LOOKAHEAD / 2.,
-        elapsed.as_secs_f64()
-    );
-    plot(trajectory).unwrap();
+    // let elapsed = now.elapsed();
+    // println!(
+    //     "MPC simulation of {:.1} seconds complete in {:.1} seconds, now plotting...",
+    //     (num_chunks as f64) * LOOKAHEAD / 2.,
+    //     elapsed.as_secs_f64()
+    // );
+    // plot(trajectory).unwrap();
 }
