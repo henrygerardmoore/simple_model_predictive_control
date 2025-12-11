@@ -2,6 +2,7 @@ use std::{
     collections::BTreeSet,
     fmt::{self, Display, Formatter},
     iter::once,
+    time::{Duration, Instant},
 };
 
 use argmin::{
@@ -85,6 +86,7 @@ pub struct DynamicsOptimizerSettings {
     pub target_size_override: Option<usize>,
     pub iter_prune_number: usize,
     pub iter_grow_number: usize,
+    pub time_limit: Option<Duration>,
 }
 
 impl Default for DynamicsOptimizerSettings {
@@ -96,6 +98,7 @@ impl Default for DynamicsOptimizerSettings {
             target_size_override: None,
             iter_grow_number: 10,
             iter_prune_number: 10,
+            time_limit: None,
         }
     }
 }
@@ -126,6 +129,8 @@ pub struct DynamicsOptimizer {
     particle_count: usize,
     iter_prune_number: usize,
     iter_grow_number: usize,
+    time_limit: Option<Duration>,
+    start_time: Instant,
 }
 
 #[derive(Clone)]
@@ -186,6 +191,8 @@ impl DynamicsOptimizer {
             particle_count: settings.particle_count,
             iter_grow_number: settings.iter_grow_number,
             iter_prune_number: settings.iter_prune_number,
+            start_time: Instant::now(),
+            time_limit: settings.time_limit,
         }
     }
 
@@ -587,6 +594,11 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
         _state: &IterState<Array1<f64>, (), (), (), (), f64>,
     ) -> TerminationStatus {
         // TODO: look for solutions with trajectory cost under a certain threshold and only terminate then
+        if let Some(time_limit) = self.time_limit
+            && self.start_time.elapsed() >= time_limit
+        {
+            return TerminationStatus::Terminated(TerminationReason::Timeout);
+        }
         if !self.solutions.is_empty() {
             TerminationStatus::Terminated(TerminationReason::SolverConverged)
         } else {
