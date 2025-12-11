@@ -1,9 +1,6 @@
-#![allow(unused)]
-
 use std::{iter::once, sync::Arc, time::Duration};
 
 use argmin::core::Executor;
-use argmin::solver::neldermead::NelderMead;
 use ndarray::{Array1, ArrayView1, array};
 
 use ndarray_linalg::Norm;
@@ -16,14 +13,14 @@ use simple_model_predictive_control::{
 const STATE_SIZE: usize = 4;
 
 // x thrust, y thrust
-const INPUT_SIZE: usize = 2;
+// const INPUT_SIZE: usize = 2;
 
 // timestep
 const DT: f64 = 0.1;
 
 const LOOKAHEAD: f64 = 1.0;
 
-const GOAL: [f64; 4] = [1., 1., 0., 0.];
+const GOAL: [f64; STATE_SIZE] = [1., 1., 0., 0.];
 
 // simple dynamics, frictionless plane where the input applies a force
 fn dynamics_function(state: &Array1<f64>, input: ArrayView1<f64>) -> Array1<f64> {
@@ -38,13 +35,6 @@ fn dynamics_function(state: &Array1<f64>, input: ArrayView1<f64>) -> Array1<f64>
     derivative[3] = input[1];
 
     derivative
-}
-
-fn distance_cost(state: &[f64; STATE_SIZE], setpoint: &[f64; STATE_SIZE]) -> f64 {
-    // l2 distance squared
-    (0..STATE_SIZE).fold(0., |acc, index| {
-        acc + (state[index] - setpoint[index]).powi(2)
-    })
 }
 
 fn state_cost(state: &Array1<f64>, setpoint: &Array1<f64>) -> f64 {
@@ -124,9 +114,9 @@ fn plot(trajectory: Array1<Array1<f64>>) -> Result<(), Box<dyn std::error::Error
     Ok(())
 }
 
-fn plot_tree(tree_segments: Vec<([f64; 2], [f64; 2])>) {
+fn plot_tree(tree_segments: Vec<([f64; 2], [f64; 2])>) -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new("tree.bmp", (1280, 720)).into_drawing_area();
-    root.fill(&WHITE);
+    root.fill(&WHITE)?;
     let (x_extent, y_extent) = tree_segments
         .iter()
         .fold((0.0_f64, 0.0_f64), |acc, (p1, p2)| {
@@ -145,31 +135,32 @@ fn plot_tree(tree_segments: Vec<([f64; 2], [f64; 2])>) {
         .y_label_area_size(30)
         .build_cartesian_2d((-x_extent)..x_extent, (-y_extent)..y_extent)
         .unwrap();
-    chart.configure_mesh().draw();
-    tree_segments.into_iter().for_each(|(point_1, point_2)| {
+    chart.configure_mesh().draw()?;
+    for (point_1, point_2) in tree_segments {
         chart.draw_series(std::iter::once(Circle::new(
             (point_2[0], point_2[1]),
             1,
             BLUE.filled(),
-        )));
+        )))?;
         chart.draw_series(LineSeries::new(
             once((point_1[0], point_1[1])).chain(once((point_2[0], point_2[1]))),
             ShapeStyle::from(&RED.mix(0.5)).stroke_width(1),
-        ));
-    });
+        ))?;
+    }
     chart
         .configure_series_labels()
         .background_style(&WHITE.mix(0.8))
         .border_style(&BLACK)
-        .draw();
+        .draw()?;
 
     chart.draw_series(std::iter::once(Circle::new(
         (GOAL[0], GOAL[1]),
         5,
         GREEN.filled(),
-    )));
+    )))?;
 
-    root.present();
+    root.present()?;
+    Ok(())
 }
 
 const OUT_FILE_NAME: &str = "simple_continuous.gif";
@@ -194,7 +185,7 @@ pub fn main() {
             .run()
             .unwrap();
 
-        plot_tree(res.solver.get_line_segments());
+        plot_tree(res.solver.get_line_segments()).unwrap();
 
         let mpc_problem = res.problem.problem.unwrap();
 
