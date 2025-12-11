@@ -53,18 +53,34 @@ impl Ord for NodeIDAndCost {
     }
 }
 
+#[derive(Clone, PartialEq)]
+pub struct Solution(Array1<f64>, f64);
+
+impl Eq for Solution {}
+
+impl Ord for Solution {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.1.total_cmp(&other.1)
+    }
+}
+
+impl PartialOrd for Solution {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 #[derive(Clone)]
 pub struct DynamicsOptimizer {
     // the dynamics at a state and the inputs to get there
     dynamics_tree: Tree<DynamicsNodeType>,
     max_depth: usize,
     // input sequence, cost
-    solutions: Vec<(Array1<f64>, f64)>,
+    solutions: BTreeSet<Solution>,
     solution_nodes: Vec<NodeId>,
     input_min_max: (Array1<f64>, Array1<f64>),
 
-    // tree size we try to maintain
-    target_size: usize,
+    target_num_leaves: usize,
 
     // node IDs we can reuse instead of inserting
     orphans: Vec<NodeId>,
@@ -112,9 +128,9 @@ impl DynamicsOptimizer {
         Self {
             dynamics_tree,
             max_depth,
-            solutions: vec![],
+            solutions: BTreeSet::new(),
             input_min_max: (input_min, input_max),
-            target_size,
+            target_num_leaves: target_size,
             orphans: vec![],
             solution_nodes: vec![],
             state_cost_epsilon: solution_cost_tolerance,
@@ -154,9 +170,8 @@ impl DynamicsOptimizer {
     fn calculate_and_sort_solutions(&mut self, mpc_problem: &MPCProblem) {
         while let Some(solution_node) = self.solution_nodes.pop() {
             self.solutions
-                .push(self.get_inputs_and_trajectory_cost_to_node(mpc_problem, solution_node));
+                .insert(self.get_inputs_and_trajectory_cost_to_node(mpc_problem, solution_node));
         }
-        self.solutions.sort_by(|s1, s2| s1.1.total_cmp(&s2.1));
     }
 
     // traverse up the tree to the root, collecting all the inputs into one and then calculating the trajectory cost from that
@@ -164,7 +179,7 @@ impl DynamicsOptimizer {
         &self,
         mpc_problem: &MPCProblem,
         node: NodeId,
-    ) -> (Array1<f64>, f64) {
+    ) -> Solution {
         let mut node = self.dynamics_tree.get(node);
         let mut inputs = vec![];
         let mut trajectory = vec![];
@@ -190,7 +205,7 @@ impl DynamicsOptimizer {
         let trajectory_cost = mpc_problem.calculate_trajectory_cost(&Array1::from_vec(trajectory), &inputs)
             // normalize by number of inputs
             / (num_inputs as f64);
-        (inputs, trajectory_cost)
+        Solution(inputs, trajectory_cost)
     }
 
     // find `num_nodes` leaves via importance sampling and grow them
@@ -430,7 +445,7 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
     ) -> Result<(IterState<Array1<f64>, (), (), (), (), f64>, Option<KV>), Error> {
         let mpc_problem = problem.problem.as_ref().unwrap();
 
-        let action = if self.leaves.len() < self.target_size {
+        let action = if self.leaves.len() < self.target_num_leaves {
             if self.grow_nodes(1) {
                 TreeOptimizationAction::Grow
             } else {
@@ -445,13 +460,15 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
 
         if !self.solutions.is_empty() {
             // calculate the solutions
-            state.best_param = Some(self.solutions[0].0.clone());
-            state.best_cost = self.solutions[0].1;
+            let best_solution = self.solutions.first().unwrap();
+            state.best_param = Some(best_solution.0.clone());
+            state.best_cost = best_solution.1;
         } else {
-            let (best_leaf_param, best_leaf_cost) = self.get_inputs_and_trajectory_cost_to_node(
-                mpc_problem,
-                self.leaves.first().unwrap().0,
-            );
+            let Solution(best_leaf_param, best_leaf_cost) = self
+                .get_inputs_and_trajectory_cost_to_node(
+                    mpc_problem,
+                    self.leaves.first().unwrap().0,
+                );
 
             state.cost = best_leaf_cost;
             if best_leaf_cost < state.best_cost {
@@ -621,8 +638,8 @@ mod test {
         // ensure that we found at least one solution
         assert!(dynamics_optimizer.solutions.len() > 0);
 
-        let solution_trajectory =
-            mpc_problem.calculate_trajectory(dynamics_optimizer.solutions[0].0.view());
+        let solution_trajectory = mpc_problem
+            .calculate_trajectory(dynamics_optimizer.solutions.first().unwrap().0.view());
 
         let last_point = solution_trajectory.last().unwrap();
 

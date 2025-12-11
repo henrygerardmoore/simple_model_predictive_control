@@ -21,7 +21,7 @@ const STATE_SIZE: usize = 4;
 // const INPUT_SIZE: usize = 2;
 
 // timestep
-const DT: f64 = 0.5;
+const DT: f64 = 0.2;
 
 const LOOKAHEAD: f64 = 5.;
 
