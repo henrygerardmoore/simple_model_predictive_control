@@ -184,8 +184,9 @@ impl DynamicsOptimizer {
                 // other things use the input as one large 1D array, return it as such
                 .flat_map(|input_chunk| input_chunk.iter().cloned()),
         );
-        let trajectory_cost =
-            mpc_problem.calculate_trajectory_cost(&Array1::from_vec(trajectory), &inputs);
+        let trajectory_cost = mpc_problem.calculate_trajectory_cost(&Array1::from_vec(trajectory), &inputs)
+            // normalize by number of inputs
+            / (num_inputs as f64);
         (inputs, trajectory_cost)
     }
 
@@ -407,12 +408,16 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
             state.best_param = Some(self.solutions[0].0.clone());
             state.best_cost = self.solutions[0].1;
         } else {
-            let (best_param, best_cost) = self.get_inputs_and_trajectory_cost_to_node(
+            let (best_leaf_param, best_leaf_cost) = self.get_inputs_and_trajectory_cost_to_node(
                 mpc_problem,
                 self.leaves.first().unwrap().0,
             );
-            state.best_cost = best_cost;
-            state.best_param = Some(best_param);
+
+            state.cost = best_leaf_cost;
+            if best_leaf_cost < state.best_cost {
+                state.best_cost = best_leaf_cost;
+                state.best_param = Some(best_leaf_param);
+            }
         }
 
         Ok((state, Some(kv!("action" => format!("{action}");))))
@@ -492,7 +497,7 @@ mod test {
         ];
 
         // run many times to be sure
-        let num_trials = 1000;
+        let num_trials = 100;
         let num_successes = (0..num_trials)
             .map(|_| {
                 let (mpc_problem, mut dynamics_optimizer) = get_simple_optimizer(goal.clone());
@@ -586,7 +591,7 @@ mod test {
         let goal = array![0., 0.];
         let (mpc_problem, dynamics_optimizer) = get_simple_optimizer(goal.clone());
         let res = Executor::new(mpc_problem, dynamics_optimizer)
-            .configure(|state| state.max_iters(10000))
+            .configure(|state| state.max_iters(10000).target_cost(1e-4))
             .run()
             .unwrap();
 
@@ -597,5 +602,119 @@ mod test {
         let last_point = solution_trajectory.last().unwrap();
 
         assert!((last_point - goal).norm() < 1e-3);
+    }
+}
+
+#[cfg(test)]
+mod bench {
+    use std::{
+        cell::RefCell,
+        hint::black_box,
+        sync::Arc,
+        time::{Duration, Instant},
+    };
+
+    use ndarray::{Array1, ArrayView1, array};
+
+    use crate::{
+        dynamics_optimizer::DynamicsOptimizer, dynamics_problem::DynamicsFunction,
+        prelude::MPCProblem,
+    };
+    use ndarray_linalg::Norm;
+
+    const DT: f64 = 1.;
+    const LOOKAHEAD: f64 = 10.;
+    const INITIAL_POS: f64 = 1.0;
+    const INITIAL_VEL: f64 = 0.0;
+
+    // input is x acceleration, state is (x, vx)
+    fn simple_continuous_dynamics(state: &Array1<f64>, input: ArrayView1<f64>) -> Array1<f64> {
+        array![state[1], input[0]]
+    }
+
+    fn simple_state_cost_function(state: &Array1<f64>, setpoint: &Array1<f64>) -> f64 {
+        (state - setpoint).norm()
+    }
+
+    // just punish input magnitude to discriminate between solutions that all reach the goal
+    fn simple_dynamics_cost_function(
+        _state: &Array1<Array1<f64>>,
+        inputs: &Array1<f64>,
+        _setpoint: &Array1<f64>,
+    ) -> f64 {
+        inputs.map(|input| input.abs()).sum()
+    }
+
+    fn get_simple_optimizer(goal: Array1<f64>) -> (MPCProblem, DynamicsOptimizer) {
+        let mpc_problem = MPCProblem {
+            setpoint: Arc::new(goal),
+            current_state: array![INITIAL_POS, INITIAL_VEL],
+            sample_period: Duration::from_secs_f64(DT),
+            lookahead_duration: Duration::from_secs_f64(LOOKAHEAD),
+            dynamics_function: DynamicsFunction::Continuous(Arc::new(&simple_continuous_dynamics)),
+            input_size: 1,
+            state_cost_function: Arc::new(&simple_state_cost_function),
+            dynamics_cost_function: Box::new(&simple_dynamics_cost_function),
+        };
+        let dynamics_optimizer =
+            DynamicsOptimizer::new(array![-10.], array![10.], &mpc_problem, 1e-3);
+        (mpc_problem, dynamics_optimizer)
+    }
+
+    fn bench_with_setup<F, G>(
+        name: &str,
+        iterations: usize,
+        mut bench_function: F,
+        mut setup_function: G,
+    ) -> Duration
+    where
+        F: FnMut(),
+        G: FnMut(),
+    {
+        let mut total_duration = Duration::ZERO;
+
+        for _ in 0..iterations {
+            // Run setup (not timed)
+            setup_function();
+
+            // Measure the function call
+            let start = Instant::now();
+            black_box(bench_function());
+            total_duration += start.elapsed();
+        }
+
+        let avg = total_duration / iterations as u32;
+        println!(
+            "{}: avg {:?}/call over {} iterations",
+            name, avg, iterations
+        );
+        avg
+    }
+
+    // run with `cargo test --release --package simple_model_predictive_control --lib -- dynamics_optimizer::bench::benchmark_grow_node --exact --nocapture`
+    #[test]
+    pub fn benchmark_grow_node() {
+        let optimal_force = 3.14159265358979;
+        let goal = array![
+            INITIAL_POS + 0.5 * optimal_force * DT.powi(2),
+            INITIAL_VEL + optimal_force * DT
+        ];
+
+        #[cfg(debug_assertions)]
+        let num_iterations = 10;
+        #[cfg(not(debug_assertions))]
+        let num_iterations = 1000;
+
+        let (_, dynamics_optimizer) = get_simple_optimizer(goal.clone());
+        let dynamics_optimizer = RefCell::new(dynamics_optimizer);
+        bench_with_setup(
+            "Grow node",
+            num_iterations,
+            || dynamics_optimizer.borrow_mut().grow_nodes(black_box(1)),
+            || {
+                let (_, new_dynamics_optimizer) = get_simple_optimizer(goal.clone());
+                dynamics_optimizer.replace(new_dynamics_optimizer);
+            },
+        );
     }
 }

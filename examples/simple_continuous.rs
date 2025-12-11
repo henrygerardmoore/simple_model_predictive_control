@@ -171,34 +171,28 @@ pub fn main() {
     println!("Running simple continuous MPC simulation...");
     let mut trajectory = Array1::<Array1<f64>>::default(0);
 
-    let mut initial_state = array![0., 0., 0., 0.];
+    let initial_state = array![0., 0., 0., 0.];
 
     // how many lookahead periods we should do
-    let num_chunks = 10;
     let goal = Array1::from_iter(GOAL.into_iter());
+    let (mpc_problem, solver) = get_mpc_problem(initial_state.clone(), goal.clone());
 
-    for _ in 0..num_chunks {
-        let (mpc_problem, solver) = get_mpc_problem(initial_state.clone(), goal.clone());
+    // Run solver
+    let res = Executor::new(mpc_problem, solver)
+        .configure(|state| state.max_iters(1000))
+        .add_observer(SlogLogger::term(), ObserverMode::Always)
+        .run()
+        .unwrap();
 
-        // Run solver
-        let res = Executor::new(mpc_problem, solver)
-            .configure(|state| state.max_iters(100))
-            .add_observer(SlogLogger::term(), ObserverMode::Always)
-            .run()
-            .unwrap();
+    plot_tree(res.solver.get_line_segments()).unwrap();
 
-        plot_tree(res.solver.get_line_segments()).unwrap();
+    let mpc_problem = res.problem.problem.unwrap();
 
-        let mpc_problem = res.problem.problem.unwrap();
-
-        // update start position and append to overall trajectory
-        let this_trajectory =
-            mpc_problem.calculate_trajectory(res.state.best_param.unwrap().view());
-        trajectory
-            .append(ndarray::Axis(0), this_trajectory.view())
-            .unwrap();
-        initial_state = this_trajectory.last().unwrap().clone();
-    }
+    // update start position and append to overall trajectory
+    let this_trajectory = mpc_problem.calculate_trajectory(res.state.best_param.unwrap().view());
+    trajectory
+        .append(ndarray::Axis(0), this_trajectory.view())
+        .unwrap();
 
     println!("MPC simulation complete, now plotting...");
     plot(trajectory).unwrap();
