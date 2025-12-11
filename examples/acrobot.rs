@@ -203,11 +203,13 @@ fn get_mpc_problem(
 
 fn plot(trajectory: Array1<Array1<f64>>) -> Result<(), Box<dyn std::error::Error>> {
     // don't render any faster than 100 fps; if we're simulating faster than that this will result in a little slow-mo, which is ok
-    let frame_time = ((DT * 1000.).round() as u32).max(50);
+    let frame_time = ((DT / (PLOT_SUBDIVISION as f64) * 1000.).round() as u32).max(10);
     let root = BitMapBackend::gif(OUT_FILE_NAME, (1280, 720), frame_time)?.into_drawing_area();
 
     // step by 0.1 / DT to target ~100 fps
-    for i in (0..trajectory.len()).step_by(((0.1 / DT) as usize).max(1)) {
+    for i in
+        (0..trajectory.len()).step_by(((0.1 / (DT / (PLOT_SUBDIVISION as f64))) as usize).max(1))
+    {
         root.fill(&WHITE)?;
 
         let point = trajectory[i].view();
@@ -217,7 +219,10 @@ fn plot(trajectory: Array1<Array1<f64>>) -> Result<(), Box<dyn std::error::Error
 
         let mut chart = ChartBuilder::on(&root)
             .caption(
-                format!("Acrobot MPC Trajectory (t = {:.1})", (i as f64) * DT),
+                format!(
+                    "Acrobot MPC Trajectory (t = {:.1})",
+                    (i as f64) * (DT / (PLOT_SUBDIVISION as f64))
+                ),
                 ("sans-serif", 50),
             )
             .build_cartesian_2d(
