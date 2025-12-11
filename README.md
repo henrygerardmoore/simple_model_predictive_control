@@ -1,37 +1,41 @@
 # simple_model_predictive_control
 
-This is a rust implementation of Model Predictive Control (MPC).
+This is a simple rust implementation of Model Predictive Control (MPC).
 
-It intends to provide a simple framework to define MPC as an [argmin](https://github.com/argmin-rs/argmin) problem.
+It intends to provide a simple framework to define MPC as an [argmin](https://github.com/argmin-rs/argmin) problem and also provides a solver to leverage the sequential nature of dynamics problems with a tree structure, in a similar fashion to [RRT](https://en.wikipedia.org/wiki/Rapidly_exploring_random_tree).
 
 I created this library for a simple, pure-rust MPC implementation with no code generation.
 
-I originally intended to use `std::autodiff` (check out its [tracking issue](https://github.com/rust-lang/rust/issues/124509) if you're interested in this) to enable usage of gradient-based optimizers, but found the necessity of using an experimental compiler to be prohibitive to development.
-Thus, I use the `finitediff` crate (also created by `argmin`) for this purpose.
+I originally intended to use `std::autodiff` (check out its [tracking issue](https://github.com/rust-lang/rust/issues/124509) if you're interested in this) with [optimization-engine](https://github.com/alphaville/optimization-engine), but found the necessity of using an experimental compiler to be prohibitive to development.
+
+## Examples
+
+Try `cargo run --profile heavy_optimization --example acrobot`, `cargo run --profile heavy_optimization --example cartpole`, or `cargo run --example simple_continuous` to see the examples.
+They each produce `.gif`s of their outputs.
+Cartpole and acrobot are run in a 'realistic' manner, only using the first optimized output and having a relatively small `dt` (0.01 and 0.1 for cartpole and acrobot, respectively).
+They all achieve faster-than-realtime performance (at least when run with the `heavy_optimization` profile on both my laptop and desktop computers).
 
 ## Benefits
 
-`simple_model_predictive_control` is lightweight, simple to set up, requires no hand calculation of gradients, and can be used out of the box with `argmin` optimizers.
+`simple_model_predictive_control` is lightweight, quick to set up, requires no hand calculation of gradients or automatic differentiation, and is simple enough to read and understand.
 
 It supports both simple continuous dynamics (Euler integration of an ODE) and custom discrete dynamics.
 Discrete dynamics functions can be used for dynamics that cannot be expressed as ODEs, using external physics simulation as the dynamics, or enforcing constraints.
 See the [acrobot](examples/acrobot.rs) and [cartpole](examples/cartpole.rs) examples for examples of how to use discrete dynamics functions for both non-ODE dynamics.
-The [acrobot](examples/acrobot.rs) example also uses RK4 as its integrator for better numerical stability.
+You could also replace their integration functions with RK4 or an integration library of your choice.
 
 Please feel encouraged to use this project as inspiration or a starting point for your own MPC implementations!
 
 I plan to implement a wrapper for this as a controller in [Copper](https://github.com/copper-project/copper-rs) along with using it for [their existing cartpole example](https://github.com/copper-project/copper-rs/tree/master/examples/cu_rp_balancebot), so stay tuned for a more realistic simulated example!
 I will provide a link to that example from this README when it is complete.
 
-I also plan to make a dynamics-aware optimizer for `argmin`. You may note that the existing example for acrobot performs only decently, same as for the cartpole example.
-This is because the optimizers I am using are simply optimizing the entire string of inputs over the whole lookahead duration, so dynamics is a black box to them.
-I will modify the examples and remove this note when that optimizer is ready.
+I want to try using [Numerica](https://github.com/symbolica-dev/numerica) and [optimization-engine](https://github.com/alphaville/optimization-engine) to still have a pure rust MPC implementation but with autodiff, but that will be in a different repo.
 
 ## Areas for Improvement
 
 ### Cost function
 
-Cost or even dynamics functions are difficult to create and tune.
+Cost and dynamics functions are difficult to create and tune.
 The [acrobot](examples/acrobot.rs) example's cost function, for instance, took quite a long time to formulate in a way that would produce the desired outcome.
 This is partially a drawback to MPC in general, but could be improved with tooling to support visualization of costs.
 Such visualization would be relatively easy to make in `plotters`, for example, but having it built-in would be a bonus.
@@ -45,16 +49,8 @@ Formulating constraints as high-penalty soft constraints is another way to work 
 
 ### Performance
 
-I'm sure there are a ton of areas for optimizations.
-The most obvious of these is to use a parallel optimizer, though!
-I added the `bulk_cost` function to the MPCProblem (see the [parallel evaluation section of the argmin book](https://www.argmin-rs.org/book/defining_optimization_problem.html?highlight=rayon#parallel-evaluation-with-bulk_-methods)), but only the particle swarm optimization solver in `argmin` currently supports this.
-I did not have much luck with PSO when setting up the examples, but please let me know if you try it out and have a different experience!
-
-There may be lower-hanging fruit in the form of utilizing more (or less) ndarray. I started out by using exclusively `f64` arrays and then ended up needing to use `ndarray`s, so it is entirely possible that removing the generics from MPCProblem entirely is the way to go.
-
-### Gradient
-
-I have not experimented with using central finite difference as opposed to forward difference. It would be nice to provide a way to choose which is used so that the user can do so.
+I have not tested this library on any 'harder' problems than cartpole and acrobot, and expect that its performance would degrade greatly on sufficiently hard problems.
+Check out the below options for production-ready MPC implementations.
 
 ## Alternatives
 
@@ -65,7 +61,7 @@ It has Rust and python bindings and works with ROS.
 
 ### Other
 
-I've used [MuJoCo MPC](https://github.com/google-deepmind/mujoco_mpc) quite a bit at my work, and it is great to use!
+I've used [MuJoCo MPC](https://github.com/google-deepmind/mujoco_mpc) at my work, and it is great to use!
 The MuJoCo simulator as a whole is quite powerful and user-friendly.
 
 ## License
