@@ -93,11 +93,11 @@ impl Default for DynamicsOptimizerSettings {
     fn default() -> Self {
         Self {
             branching_factor: 4,
-            nelder_mead_iters: 1000,
-            particle_count: 100,
+            nelder_mead_iters: 20,
+            particle_count: 50,
             target_size_override: None,
-            iter_grow_number: 10,
-            iter_prune_number: 10,
+            iter_grow_number: 20,
+            iter_prune_number: 20,
             time_limit: None,
         }
     }
