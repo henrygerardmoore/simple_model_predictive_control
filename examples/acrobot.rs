@@ -319,7 +319,7 @@ fn plot_tree(tree_segments: Vec<([f64; 2], [f64; 2])>) -> Result<(), Box<dyn std
         .margin(5)
         .x_label_area_size(30)
         .y_label_area_size(30)
-        .build_cartesian_2d(0.0..TAU, 0.0..TAU)
+        .build_cartesian_2d(-PI..PI, -PI..PI)
         .unwrap();
     chart.configure_mesh().draw()?;
 
