@@ -118,6 +118,24 @@ impl DynamicsOptimizer {
         }
     }
 
+    // each element of the vector is a line segment, only works for 2D
+    pub fn get_line_segments(&self) -> Vec<([f64; 2], [f64; 2])> {
+        self.line_segments_recursive(self.dynamics_tree.root().id())
+    }
+
+    fn line_segments_recursive(&self, node_id: NodeId) -> Vec<([f64; 2], [f64; 2])> {
+        let mut to_return = vec![];
+        let node = self.dynamics_tree.get(node_id).unwrap();
+        let self_position = node.value().0.get_2d_state_array();
+
+        for child in node.children() {
+            to_return.push((self_position, child.value().0.get_2d_state_array()));
+            to_return.append(&mut self.line_segments_recursive(child.id()));
+        }
+
+        to_return
+    }
+
     fn depth(mut node_ref: NodeRef<'_, DynamicsNodeType>) -> usize {
         let mut depth = 0;
 

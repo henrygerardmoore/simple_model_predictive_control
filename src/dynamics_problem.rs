@@ -73,6 +73,13 @@ pub struct DynamicsProblem {
     pub dt: Duration,
 }
 
+impl DynamicsProblem {
+    // just for plotting example, only works for 2D
+    pub fn get_2d_state_array(&self) -> [f64; 2] {
+        [self.state[0], self.state[1]]
+    }
+}
+
 impl CostFunction for DynamicsProblem {
     type Param = Array1<f64>;
 

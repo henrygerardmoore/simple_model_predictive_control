@@ -1,6 +1,6 @@
 #![allow(unused)]
 
-use std::{sync::Arc, time::Duration};
+use std::{iter::once, sync::Arc, time::Duration};
 
 use argmin::core::Executor;
 use argmin::solver::neldermead::NelderMead;
@@ -124,10 +124,37 @@ fn plot(trajectory: Array1<Array1<f64>>) -> Result<(), Box<dyn std::error::Error
     Ok(())
 }
 
-#[cfg(debug_assertions)]
-const OUT_FILE_NAME: &str = "simple_continuous_debug.gif";
-#[cfg(not(debug_assertions))]
-const OUT_FILE_NAME: &str = "simple_continuous_release.gif";
+fn plot_tree(tree_segments: Vec<([f64; 2], [f64; 2])>) {
+    let root = BitMapBackend::new("tree.bmp", (1280, 720)).into_drawing_area();
+    root.fill(&WHITE);
+    let (x_extent, y_extent) = tree_segments
+        .iter()
+        .fold((0.0_f64, 0.0_f64), |acc, (p1, p2)| {
+            (
+                acc.0.max(p1[0].abs()).max(p2[0].abs()),
+                acc.1.max(p1[1].abs()).max(p2[1].abs()),
+            )
+        });
+    let mut chart = ChartBuilder::on(&root)
+        .caption("MPC Tree", ("sans-serif", 50))
+        .build_cartesian_2d((-x_extent)..x_extent, (-y_extent)..y_extent)
+        .unwrap();
+    tree_segments.into_iter().for_each(|(point_1, point_2)| {
+        chart.draw_series(std::iter::once(Circle::new(
+            (point_2[0], point_2[1]),
+            1,
+            GREEN.filled(),
+        )));
+        chart.draw_series(LineSeries::new(
+            once((point_1[0], point_1[1])).chain(once((point_2[0], point_2[1]))),
+            ShapeStyle::from(&RED.mix(0.5)).stroke_width(1),
+        ));
+    });
+
+    root.present();
+}
+
+const OUT_FILE_NAME: &str = "simple_continuous.gif";
 // see plotters animation example for reference:
 // https://github.com/plotters-rs/plotters/blob/master/plotters/examples/animation.rs
 pub fn main() {
@@ -145,9 +172,11 @@ pub fn main() {
 
         // Run solver
         let res = Executor::new(mpc_problem, solver)
-            .configure(|state| state.max_iters(1000))
+            .configure(|state| state.max_iters(10))
             .run()
             .unwrap();
+
+        plot_tree(res.solver.get_line_segments());
 
         let mpc_problem = res.problem.problem.unwrap();
 
