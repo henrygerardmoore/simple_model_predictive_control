@@ -354,3 +354,66 @@ pub fn main() {
     trajectory_to_plot_format(&mut trajectory);
     plot(trajectory).unwrap();
 }
+
+#[cfg(test)]
+mod bench {
+    use super::*;
+    use std::hint::black_box;
+    use std::time::{Duration, Instant};
+
+    fn bench_function<F>(name: &str, iterations: usize, mut f: F) -> Duration
+    where
+        F: FnMut(),
+    {
+        let mut total_duration = Duration::ZERO;
+
+        for _ in 0..iterations {
+            let start = Instant::now();
+            black_box(f());
+            total_duration += start.elapsed();
+        }
+
+        let avg = total_duration / iterations as u32;
+        println!(
+            "{}: avg {:?}/call over {} iterations",
+            name, avg, iterations
+        );
+        avg
+    }
+
+    // run with `cargo test --release --package simple_model_predictive_control --example cartpole -- bench::benchmark_dynamics --exact --nocapture`
+    #[test]
+    pub fn benchmark_dynamics() {
+        #[cfg(debug_assertions)]
+        let num_iterations = 1000;
+        #[cfg(not(debug_assertions))]
+        let num_iterations = 100_000_000;
+
+        let test_state = array![1., 2., PI / 2., 0.123];
+        let test_input = array![5.];
+
+        bench_function("state_derivative", num_iterations, || {
+            dynamics_function(
+                black_box(&test_state),
+                black_box(test_input.view()),
+                black_box(Duration::from_secs_f32(0.1)),
+            );
+        });
+    }
+
+    // run with `cargo test --release --package simple_model_predictive_control --example cartpole -- bench::benchmark_state_cost --exact --nocapture`
+    #[test]
+    pub fn benchmark_state_cost() {
+        #[cfg(debug_assertions)]
+        let num_iterations = 1000;
+        #[cfg(not(debug_assertions))]
+        let num_iterations = 100_000_000;
+
+        let test_state = array![1., 2., PI / 2., 0.123];
+        let setpoint = Array1::from_iter(GOAL.into_iter());
+
+        bench_function("state_cost", num_iterations, || {
+            state_cost(black_box(&test_state), black_box(&setpoint));
+        });
+    }
+}
