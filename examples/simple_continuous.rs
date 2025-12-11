@@ -187,7 +187,7 @@ pub fn main() {
     // Run solver
     let res = Executor::new(mpc_problem, solver)
         .configure(|state| state.max_iters(10000))
-        .add_observer(SlogLogger::term(), ObserverMode::Always)
+        .add_observer(SlogLogger::term(), ObserverMode::Every(50))
         .run()
         .unwrap();
 

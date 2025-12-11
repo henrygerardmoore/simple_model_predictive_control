@@ -218,7 +218,10 @@ fn get_mpc_problem(
         array![INPUT_MAX],
         &mpc_problem,
         1e-2,
-        DynamicsOptimizerSettings::default(),
+        DynamicsOptimizerSettings {
+            time_limit: Some(Duration::from_secs_f32(5.)),
+            ..Default::default()
+        },
     );
     (mpc_problem, dynamics_optimizer)
 }
@@ -346,7 +349,7 @@ pub fn main() {
         // Run solver
         let res = Executor::new(mpc_problem, solver)
             .configure(|state| state.max_iters(1000))
-            .add_observer(SlogLogger::term(), ObserverMode::Always)
+            .add_observer(SlogLogger::term(), ObserverMode::Every(50))
             .run()
             .unwrap();
 
