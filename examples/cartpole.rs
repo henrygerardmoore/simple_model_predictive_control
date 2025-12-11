@@ -5,8 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use argmin::core::{Executor, observers::ObserverMode};
-use argmin_observer_slog::SlogLogger;
+use argmin::core::Executor;
 use ndarray::{Array1, ArrayView1, array};
 
 use ndarray_linalg::Norm;
@@ -28,6 +27,8 @@ const INPUT_SIZE: usize = 1;
 const DT: f64 = 0.1;
 
 const PLOT_SUBDIVISION: usize = 10;
+
+const CONTROLLER_TIME_LIMIT: f64 = 0.01;
 
 // lookahead time (s)
 const LOOKAHEAD: f64 = 5.;
@@ -149,7 +150,7 @@ fn get_mpc_problem(
         &mpc_problem,
         1e-2,
         DynamicsOptimizerSettings {
-            time_limit: Some(Duration::from_secs_f32(0.01)),
+            time_limit: Some(Duration::from_secs_f64(CONTROLLER_TIME_LIMIT)),
             ..Default::default()
         },
     );
@@ -157,7 +158,6 @@ fn get_mpc_problem(
 }
 
 fn plot(trajectory: Array1<Array1<f64>>) -> Result<(), Box<dyn std::error::Error>> {
-    let now = Instant::now();
     // don't render any faster than 100 fps; if we're simulating faster than that this will result in a little slow-mo, which is ok
     let frame_time = ((DT / (PLOT_SUBDIVISION as f64) * 1000.).round() as u32).max(10);
     let root = BitMapBackend::gif(OUT_FILE_NAME, (1280, 720), frame_time)?.into_drawing_area();
@@ -210,13 +210,6 @@ fn plot(trajectory: Array1<Array1<f64>>) -> Result<(), Box<dyn std::error::Error
 
         root.present()?;
     }
-
-    let elapsed = now.elapsed();
-    println!(
-        "Plotting took {:.1} seconds. Result has been saved to {}",
-        elapsed.as_secs_f64(),
-        OUT_FILE_NAME
-    );
 
     Ok(())
 }
@@ -318,36 +311,36 @@ fn subdivide_trajectory(
 const OUT_FILE_NAME: &str = "cartpole.gif";
 
 pub fn main() {
-    println!("Running cartpole MPC simulation...");
+    println!("Running acrobot MPC simulation...");
     let now = Instant::now();
-    let mut trajectory = Array1::<Array1<f64>>::default(0);
 
-    let initial_state = array![0., 0., 0., 0.];
+    let mut initial_state = array![0., 0., 0., 0.];
+    let mut trajectory = array![initial_state.clone()];
+    let mut line_segments = vec![];
 
     let goal = Array1::from_iter(GOAL.into_iter());
-    let (mut mpc_problem, solver) = get_mpc_problem(initial_state, goal.clone());
-    // Run solver
-    let res = Executor::new(mpc_problem, solver)
-        .configure(|state| state.max_iters(100))
-        .add_observer(SlogLogger::term(), ObserverMode::Every(50))
-        .run()
-        .unwrap();
+    let num_chunks = (5. / CONTROLLER_TIME_LIMIT).ceil() as usize;
+    for _ in 0..num_chunks {
+        let (mut mpc_problem, solver) = get_mpc_problem(initial_state, goal.clone());
+        // Run solver
+        let res = Executor::new(mpc_problem, solver).run().unwrap();
+        let mut this_segments = res.solver.get_line_segments(0, 1);
+        line_segments.append(&mut this_segments);
+        let optimized_input = array![*res.state.best_param.unwrap().first().unwrap()];
+
+        mpc_problem = res.problem.problem.unwrap();
+        let this_trajectory = mpc_problem.calculate_trajectory(optimized_input.view());
+        trajectory
+            .append(ndarray::Axis(0), this_trajectory.view())
+            .unwrap();
+        initial_state = this_trajectory.last().unwrap().clone();
+    }
+
     let elapsed = now.elapsed();
     println!(
-        "MPC simulation of {:.2} seconds complete in {:.2} seconds, now plotting...",
-        LOOKAHEAD,
+        "MPC simulation complete in {:.2} seconds, now plotting...",
         elapsed.as_secs_f64()
     );
-
-    plot_tree(res.solver.get_line_segments(0, 2)).unwrap();
-
-    mpc_problem = res.problem.problem.unwrap();
-    let this_trajectory = mpc_problem.calculate_trajectory(res.state.best_param.unwrap().view());
-    trajectory
-        .append(ndarray::Axis(0), this_trajectory.view())
-        .unwrap();
-
-    let mut trajectory = subdivide_trajectory(trajectory.view(), PLOT_SUBDIVISION);
 
     #[cfg(feature = "profiling")]
     {
@@ -355,8 +348,21 @@ pub fn main() {
         return;
     }
 
+    let now = Instant::now();
+
+    plot_tree(line_segments).unwrap();
+
+    // plot with subdivisions for smoother visualizations
+    let mut trajectory = subdivide_trajectory(trajectory.view(), PLOT_SUBDIVISION);
     trajectory_to_plot_format(&mut trajectory);
     plot(trajectory).unwrap();
+
+    let elapsed = now.elapsed();
+    println!(
+        "Plotting took {:.1} seconds. Result has been saved to {}",
+        elapsed.as_secs_f64(),
+        OUT_FILE_NAME
+    );
 }
 
 #[cfg(test)]
