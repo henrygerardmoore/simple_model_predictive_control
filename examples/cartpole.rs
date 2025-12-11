@@ -261,6 +261,7 @@ fn plot_tree(tree_segments: Vec<([f64; 2], [f64; 2])>) -> Result<(), Box<dyn std
 }
 
 const OUT_FILE_NAME: &str = "cartpole.gif";
+
 pub fn main() {
     println!("Running cartpole MPC simulation...");
     let now = Instant::now();
@@ -292,13 +293,19 @@ pub fn main() {
         initial_state = this_trajectory.last().unwrap().clone();
     }
 
-    trajectory_to_plot_format(&mut trajectory);
-
     let elapsed = now.elapsed();
     println!(
         "MPC simulation of {:.1} seconds complete in {:.1} seconds, now plotting...",
         (num_chunks as f64) * LOOKAHEAD,
         elapsed.as_secs_f64()
     );
+
+    #[cfg(feature = "profiling")]
+    {
+        println!("Profiling mode: skipping plotting");
+        return;
+    }
+
+    trajectory_to_plot_format(&mut trajectory);
     plot(trajectory).unwrap();
 }

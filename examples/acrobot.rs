@@ -337,13 +337,19 @@ pub fn main() {
         initial_state = this_trajectory.last().unwrap().clone();
     }
 
-    trajectory_to_plot_format(&mut trajectory);
-
     let elapsed = now.elapsed();
     println!(
         "MPC simulation of {:.1} seconds complete in {:.1} seconds, now plotting...",
         (num_chunks as f64) * LOOKAHEAD,
         elapsed.as_secs_f64()
     );
+
+    #[cfg(feature = "profiling")]
+    {
+        println!("Profiling mode: skipping plotting");
+        return;
+    }
+
+    trajectory_to_plot_format(&mut trajectory);
     plot(trajectory).unwrap();
 }

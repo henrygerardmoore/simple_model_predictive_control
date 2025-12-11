@@ -1,3 +1,5 @@
 /target
 *.gif
 *.bmp
+flamegraph.svg
+perf.*

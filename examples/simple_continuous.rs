@@ -176,7 +176,6 @@ const OUT_FILE_NAME: &str = "simple_continuous.gif";
 pub fn main() {
     println!("Running simple continuous MPC simulation...");
     let now = Instant::now();
-    let mut trajectory = Array1::<Array1<f64>>::default(0);
 
     let initial_state = array![0., 0., 0., 0.];
 
@@ -195,16 +194,18 @@ pub fn main() {
 
     let mpc_problem = res.problem.problem.unwrap();
 
-    // update start position and append to overall trajectory
-    let this_trajectory = mpc_problem.calculate_trajectory(res.state.best_param.unwrap().view());
-    trajectory
-        .append(ndarray::Axis(0), this_trajectory.view())
-        .unwrap();
+    let trajectory = mpc_problem.calculate_trajectory(res.state.best_param.unwrap().view());
 
     let elapsed = now.elapsed();
     println!(
         "MPC simulation complete in {:.2} seconds, now plotting...",
         elapsed.as_secs_f64()
     );
+
+    #[cfg(feature = "profiling")]
+    {
+        println!("Profiling mode: skipping plotting");
+        return;
+    }
     plot(trajectory).unwrap();
 }

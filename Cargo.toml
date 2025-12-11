@@ -21,3 +21,11 @@ ndarray = {version = "0.16", features = ["rayon", "serde"]}
 ndarray-linalg = { version = "0.17", features = ["intel-mkl-static"] }
 ndarray-rand = "0.15.0"
 plotters = "0.3.7"
+
+[features]
+profiling = []
+
+# run with: `cargo flamegraph --profile profiling --features profiling --example acrobot`
+[profile.profiling]
+inherits = "release"
+debug = true  # Include debug symbols for better flamegraph annotations
