@@ -94,7 +94,7 @@ impl Default for DynamicsOptimizerSettings {
         Self {
             branching_factor: 4,
             nelder_mead_iters: 1000,
-            particle_count: 100,
+            particle_count: 50,
             target_size_override: None,
             iter_grow_number: 10,
             iter_prune_number: 10,
@@ -374,24 +374,18 @@ impl DynamicsOptimizer {
         assert_eq!(minima.len(), maxima.len());
         let dimension = minima.len();
 
-        // Pre-allocate output
+        // pre-allocate output
         let mut particles = Vec::with_capacity(num_particles);
 
-        // Pre-compute range once
+        // pre-compute range once
         let ranges = &maxima - &minima;
 
-        // Generate all random numbers at once (unchanged)
         let uniform_dist = Uniform::new(0., 1.);
         let unit_randoms = Array::random((num_particles, dimension), uniform_dist);
 
         // Process each particle
         for i in 0..num_particles {
-            // Scale the random sample to [min, max] in-place
-            let mut input = minima.clone();
-            for j in 0..dimension {
-                input[j] += unit_randoms[[i, j]] * ranges[j];
-            }
-
+            let input = &minima + &(&unit_randoms.row(i).to_owned() * &ranges);
             let cost = dynamics.cost(&input).unwrap();
             particles.push(Particle { input, cost });
         }
