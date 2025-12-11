@@ -1,6 +1,6 @@
 use std::{
     f64::consts::{PI, TAU},
-    iter::{once, repeat},
+    iter::once,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -301,22 +301,47 @@ fn plot_tree(tree_segments: Vec<([f64; 2], [f64; 2])>) -> Result<(), Box<dyn std
     Ok(())
 }
 
+fn signed_angle_difference(theta1: f64, theta2: f64) -> f64 {
+    let mut diff = (theta2 - theta1) % (2.0 * std::f64::consts::PI);
+
+    if diff > std::f64::consts::PI {
+        diff -= 2.0 * std::f64::consts::PI;
+    } else if diff < -std::f64::consts::PI {
+        diff += 2.0 * std::f64::consts::PI;
+    }
+
+    diff
+}
+
 fn subdivide_trajectory(
-    trajectory: ArrayView1<f64>,
-    input_size: usize,
+    trajectory: ArrayView1<Array1<f64>>,
     subdivision: usize,
-) -> Array1<f64> {
-    // return an array with each input (of size input_size) repeated `subdivision` times
+) -> Array1<Array1<f64>> {
+    assert!(subdivision > 0, "Cannot subdivide 0 times");
+    // interpolate between each trajectory point
+    // we will add `subdivision` - 1 equispaced points between each pair
+    let interpoland_step = 1. / (subdivision as f64);
     Array1::from_iter(
-        trajectory
-            .exact_chunks(input_size)
-            .into_iter()
-            .flat_map(|input| {
-                repeat(input.iter().map(|input_value| *input_value))
-                    .take(subdivision)
-                    .flatten()
-                    .collect::<Vec<_>>()
-            }),
+        (0..(trajectory.len() - 1))
+            .flat_map(|i| {
+                let p1 = &trajectory[i];
+                let p2 = &trajectory[i + 1];
+                let delta = array![
+                    signed_angle_difference(p1[0], p2[0]),
+                    signed_angle_difference(p1[1], p2[1]),
+                    p2[2] - p1[2],
+                    p2[3] - p1[3]
+                ];
+                (0..subdivision).map(move |interp_index| {
+                    let mut out_state =
+                        p1 + (interp_index as f64) * interpoland_step * delta.clone();
+                    out_state[0] = out_state[0].rem_euclid(TAU);
+                    out_state[1] = out_state[1].rem_euclid(TAU);
+                    out_state
+                })
+            })
+            // this would otherwise miss the last point in the traj
+            .chain(once(trajectory.last().unwrap().clone())),
     )
 }
 
@@ -359,14 +384,12 @@ pub fn main() {
     plot_tree(res.solver.get_line_segments(0, 1)).unwrap();
 
     // plot with subdivisions for smoother visualizations
-    let trajectory = res.state.best_param.unwrap();
-    let subdivided_trajectory =
-        subdivide_trajectory(trajectory.view(), INPUT_SIZE, PLOT_SUBDIVISION);
+    let optimized_inputs = res.state.best_param.unwrap();
 
     mpc_problem = res.problem.problem.unwrap();
-    mpc_problem.set_dt(Duration::from_secs_f64(DT / (PLOT_SUBDIVISION as f64)));
-    let mut trajectory = mpc_problem.calculate_trajectory(subdivided_trajectory.view());
+    let trajectory = mpc_problem.calculate_trajectory(optimized_inputs.view());
 
+    let mut trajectory = subdivide_trajectory(trajectory.view(), PLOT_SUBDIVISION);
     trajectory_to_plot_format(&mut trajectory);
     plot(trajectory).unwrap();
 
