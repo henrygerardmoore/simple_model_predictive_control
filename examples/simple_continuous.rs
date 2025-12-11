@@ -141,6 +141,12 @@ fn plot_tree(tree_segments: Vec<([f64; 2], [f64; 2])>) -> Result<(), Box<dyn std
         .build_cartesian_2d((-x_extent)..x_extent, (-y_extent)..y_extent)
         .unwrap();
     chart.configure_mesh().draw()?;
+
+    chart.draw_series(std::iter::once(Circle::new(
+        (GOAL[0], GOAL[2]),
+        5,
+        GREEN.filled(),
+    )))?;
     for (point_1, point_2) in tree_segments {
         chart.draw_series(std::iter::once(Circle::new(
             (point_2[0], point_2[1]),
@@ -152,12 +158,6 @@ fn plot_tree(tree_segments: Vec<([f64; 2], [f64; 2])>) -> Result<(), Box<dyn std
             ShapeStyle::from(&RED.mix(0.5)).stroke_width(1),
         ))?;
     }
-
-    chart.draw_series(std::iter::once(Circle::new(
-        (GOAL[0], GOAL[2]),
-        5,
-        GREEN.filled(),
-    )))?;
 
     root.present()?;
     Ok(())

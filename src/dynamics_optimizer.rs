@@ -117,7 +117,7 @@ impl DynamicsOptimizer {
         .ceil() as usize;
         let input_size = mpc_problem.input_size;
 
-        let target_size = max_depth * input_size * 1000;
+        let target_size = max_depth * input_size * 2000;
 
         let root_dynamics = DynamicsProblem {
             dynamics_function: mpc_problem.dynamics_function.clone(),

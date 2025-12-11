@@ -2,6 +2,7 @@
 
 use std::{
     f64::consts::{PI, TAU},
+    iter::once,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -13,6 +14,7 @@ use argmin::{
 use argmin_observer_slog::SlogLogger;
 use ndarray::{Array1, ArrayView1, array};
 
+use ndarray_linalg::Norm;
 use plotters::{prelude::*, style::full_palette::GREY};
 use simple_model_predictive_control::{
     dynamics_optimizer::DynamicsOptimizer, dynamics_problem::DynamicsFunction, prelude::*,
@@ -26,7 +28,7 @@ const STATE_SIZE: usize = 4;
 const INPUT_SIZE: usize = 1;
 
 // timestep (s)
-const DT: f64 = 0.05;
+const DT: f64 = 0.1;
 
 // lookahead time (s)
 const LOOKAHEAD: f64 = 2.5;
@@ -124,12 +126,8 @@ fn terminal_cost(state: &[f64; STATE_SIZE], setpoint: &[f64; STATE_SIZE]) -> f64
 }
 
 fn state_cost(state: &Array1<f64>, setpoint: &Array1<f64>) -> f64 {
-    let angle_tolerance = 0.1;
-    // penalize off-target x position
-    2. * (state[0] - setpoint[0]).powi(2)
-    // penalize off-target angle, but only if it's above a tolerable deviation so that the cart can move to the x target without cost
-    + 3. * ((state[2] - setpoint[2]).abs() - angle_tolerance).max(0.).powi(2)
-    // don't penalize commands in this case to prefer a better solution
+    let weights = array![5., 1., 10., 1.];
+    ((state - setpoint) * weights).norm()
 }
 
 fn simple_dynamics_cost_function(
@@ -150,12 +148,12 @@ fn get_mpc_problem(
         Duration::from_secs_f64(DT),
         Duration::from_secs_f64(LOOKAHEAD),
         DynamicsFunction::Discrete(Arc::new(dynamics_function)),
-        2,
+        INPUT_SIZE,
         Arc::new(state_cost),
         Box::new(simple_dynamics_cost_function),
     );
     let dynamics_optimizer =
-        DynamicsOptimizer::new(array![-10., -10.], array![10., 10.], &mpc_problem, 1e-3);
+        DynamicsOptimizer::new(array![-100.], array![100.], &mpc_problem, 1e-2);
     (mpc_problem, dynamics_optimizer)
 }
 
@@ -237,6 +235,46 @@ fn trajectory_to_plot_format(trajectory: &mut Array1<Array1<f64>>) {
     });
 }
 
+fn plot_tree(tree_segments: Vec<([f64; 2], [f64; 2])>) -> Result<(), Box<dyn std::error::Error>> {
+    let root = BitMapBackend::new("tree.bmp", (1280, 720)).into_drawing_area();
+    root.fill(&WHITE)?;
+    let (x_extent, y_extent) = tree_segments
+        .iter()
+        .fold((0.0_f64, 0.0_f64), |acc, (p1, p2)| {
+            (
+                acc.0.max(p1[0].abs()).max(p2[0].abs()),
+                acc.1.max(p1[1].abs()).max(p2[1].abs()),
+            )
+        });
+
+    let x_extent = x_extent.max(GOAL[0] + 0.01);
+    let y_extent = y_extent.max(GOAL[2] + 0.01);
+    let mut chart = ChartBuilder::on(&root)
+        .caption("MPC Tree", ("sans-serif", 50))
+        .margin(5)
+        .x_label_area_size(30)
+        .y_label_area_size(30)
+        .build_cartesian_2d((-x_extent)..x_extent, (-y_extent)..y_extent)
+        .unwrap();
+    chart.configure_mesh().draw()?;
+
+    chart.draw_series(std::iter::once(Circle::new(
+        (GOAL[0], GOAL[2]),
+        5,
+        GREEN.filled(),
+    )))?;
+    for (point_1, point_2) in tree_segments {
+        chart.draw_series(std::iter::once(Circle::new(
+            (point_2[0], point_2[1]),
+            1,
+            BLUE.filled(),
+        )))?;
+    }
+
+    root.present()?;
+    Ok(())
+}
+
 const OUT_FILE_NAME: &str = "cartpole.gif";
 pub fn main() {
     println!("Running cartpole MPC simulation...");
@@ -246,7 +284,7 @@ pub fn main() {
     let mut initial_state = array![0., 0., 0., 0.];
 
     // how many lookahead periods we should do
-    let num_chunks = 5;
+    let num_chunks = 1;
     let goal = Array1::from_iter(GOAL.into_iter());
 
     for _ in 0..num_chunks {
@@ -257,6 +295,8 @@ pub fn main() {
             .add_observer(SlogLogger::term(), ObserverMode::Always)
             .run()
             .unwrap();
+
+        plot_tree(res.solver.get_line_segments()).unwrap();
 
         mpc_problem = res.problem.problem.unwrap();
         let this_trajectory =
