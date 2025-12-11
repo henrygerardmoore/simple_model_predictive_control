@@ -84,7 +84,7 @@ impl DynamicsOptimizer {
         .ceil() as usize;
         let input_size = mpc_problem.input_size;
 
-        let target_size = max_depth * input_size * 1000;
+        let target_size = max_depth * input_size * 100;
 
         let root_dynamics = DynamicsProblem {
             dynamics_function: mpc_problem.dynamics_function.clone(),
@@ -189,22 +189,26 @@ impl DynamicsOptimizer {
         (inputs, trajectory_cost)
     }
 
-    // find the `num_nodes` best leaves and add children to them
-    // TODO: try out importance sampling here, too
+    // find `num_nodes` leaves via importance sampling and grow them
     fn grow_nodes(&mut self, num_nodes: usize) {
-        let best_leaf_ids: Vec<NodeId> = self
+        let (ids, weights): (Vec<_>, Vec<_>) = self
             .leaves
             .iter()
-            .filter_map(|NodeIDAndCost(node_id, _cost)| {
-                let node_ref = self.dynamics_tree.get(*node_id).unwrap();
+            .filter_map(|id_and_cost| {
+                let node_ref = self.dynamics_tree.get(id_and_cost.0).unwrap();
                 let depth = Self::depth(node_ref);
                 if depth < self.max_depth {
-                    Some(node_ref.id())
+                    Some((id_and_cost.0, id_and_cost.1))
                 } else {
                     None
                 }
             })
-            .take(num_nodes)
+            .unzip();
+
+        let dist = WeightedIndex::new(weights.iter()).unwrap();
+
+        let best_leaf_ids: Vec<NodeId> = (0..num_nodes)
+            .map(|_| ids[dist.sample(&mut rand::rng())])
             .collect();
 
         best_leaf_ids.into_iter().for_each(|id_to_grow| {
@@ -399,20 +403,17 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
         self.calculate_and_sort_solutions(mpc_problem);
 
         if !self.solutions.is_empty() {
-            // `calculate_solutions`
+            // calculate the solutions
             state.best_param = Some(self.solutions[0].0.clone());
             state.best_cost = self.solutions[0].1;
+        } else {
+            let (best_param, best_cost) = self.get_inputs_and_trajectory_cost_to_node(
+                mpc_problem,
+                self.leaves.first().unwrap().0,
+            );
+            state.best_cost = best_cost;
+            state.best_param = Some(best_param);
         }
-
-        println!(
-            "Number of nodes: {}",
-            self.dynamics_tree
-                .nodes()
-                .filter(|node| { node.has_children() || node.parent().is_some() })
-                .count()
-        );
-        println!("Number of leaves: {}", self.leaves.len());
-        println!("Best leaf cost: {}", self.leaves.first().unwrap().1);
 
         Ok((state, Some(kv!("action" => format!("{action}");))))
     }

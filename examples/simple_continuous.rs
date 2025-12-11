@@ -1,6 +1,7 @@
 use std::{iter::once, sync::Arc, time::Duration};
 
-use argmin::core::Executor;
+use argmin::core::{Executor, observers::ObserverMode};
+use argmin_observer_slog::SlogLogger;
 use ndarray::{Array1, ArrayView1, array};
 
 use ndarray_linalg::Norm;
@@ -181,7 +182,8 @@ pub fn main() {
 
         // Run solver
         let res = Executor::new(mpc_problem, solver)
-            .configure(|state| state.max_iters(10))
+            .configure(|state| state.max_iters(100))
+            .add_observer(SlogLogger::term(), ObserverMode::Always)
             .run()
             .unwrap();
 
