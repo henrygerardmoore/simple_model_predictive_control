@@ -13,12 +13,15 @@ use ndarray::Array1;
 
 use crate::{dynamics_problem::DynamicsProblem, prelude::MPCProblem};
 
+type DynamicsNodeType = (DynamicsProblem, Array1<f64>);
 #[derive(Clone)]
 pub struct DynamicsOptimizer {
-    dynamics_tree: Tree<DynamicsProblem>,
+    // the dynamics at a state and the inputs to get there
+    dynamics_tree: Tree<DynamicsNodeType>,
     max_depth: usize,
     // input sequence, cost
     solutions: Vec<(Array1<f64>, f64)>,
+    solution_nodes: Vec<NodeId>,
     input_min_max: (Array1<f64>, Array1<f64>),
 
     // tree size we try to maintain
@@ -38,13 +41,16 @@ impl DynamicsOptimizer {
         let target_size = max_depth * input_size * 1000;
 
         let dynamics_tree = Tree::with_capacity(
-            DynamicsProblem {
-                dynamics_function: mpc_problem.dynamics_function.clone(),
-                state_cost_function: mpc_problem.state_cost_function.clone(),
-                state: mpc_problem.current_state.clone(),
-                set_point: mpc_problem.setpoint.clone(),
-                dt: mpc_problem.sample_period,
-            },
+            (
+                DynamicsProblem {
+                    dynamics_function: mpc_problem.dynamics_function.clone(),
+                    state_cost_function: mpc_problem.state_cost_function.clone(),
+                    state: mpc_problem.current_state.clone(),
+                    set_point: mpc_problem.setpoint.clone(),
+                    dt: mpc_problem.sample_period,
+                },
+                Array1::<f64>::zeros(0),
+            ),
             target_size * 2,
         );
 
@@ -58,10 +64,11 @@ impl DynamicsOptimizer {
             input_min_max: (input_min, input_max),
             target_size,
             orphans: vec![],
+            solution_nodes: vec![],
         }
     }
 
-    fn depth(mut node_ref: NodeRef<'_, DynamicsProblem>) -> usize {
+    fn depth(mut node_ref: NodeRef<'_, DynamicsNodeType>) -> usize {
         let mut depth = 0;
 
         while let Some(parent) = node_ref.parent() {
@@ -72,13 +79,44 @@ impl DynamicsOptimizer {
         depth
     }
 
+    // traverse up the tree to the root, collecting all the inputs into one and then calculating the trajectory cost from that
+    fn get_inputs_and_trajectory_cost_to_node(
+        &self,
+        mpc_problem: &MPCProblem,
+        node: NodeId,
+    ) -> (Array1<f64>, f64) {
+        let mut node = self.dynamics_tree.get(node);
+        let mut inputs = vec![];
+        let mut trajectory = vec![];
+        while let Some(node_ref) = node.take() {
+            inputs.push(node_ref.value().1.clone());
+            trajectory.push(node_ref.value().0.state.clone());
+
+            node = node_ref.parent();
+        }
+        inputs.reverse();
+        // flatten inputs
+        let inputs = Array1::from_iter(
+            inputs
+                .iter()
+                .flat_map(|input_chunk| input_chunk.iter().cloned()),
+        );
+        let trajectory_cost =
+            mpc_problem.calculate_trajectory_cost(&Array1::from_vec(trajectory), &inputs);
+        (inputs, trajectory_cost)
+    }
+
     // find the `num_nodes` best leaves and add children to them
     fn grow_nodes(&mut self, num_nodes: usize) {
-        let mut leaves = self.leaves().collect::<Vec<NodeRef<'_, DynamicsProblem>>>();
+        let mut leaves = self
+            .leaves()
+            .collect::<Vec<NodeRef<'_, DynamicsNodeType>>>();
 
         leaves.sort_by(|n1, n2| {
-            let n1_val = (n1.value().state_cost_function)(&n1.value().state, &n1.value().set_point);
-            let n2_val = (n2.value().state_cost_function)(&n2.value().state, &n2.value().set_point);
+            let dynamics_1 = &n1.value().0;
+            let dynamics_2 = &n2.value().0;
+            let n1_val = (dynamics_1.state_cost_function)(&dynamics_1.state, &dynamics_1.set_point);
+            let n2_val = (dynamics_2.state_cost_function)(&dynamics_2.state, &dynamics_2.set_point);
             n1_val.total_cmp(&n2_val)
         });
 
@@ -102,11 +140,19 @@ impl DynamicsOptimizer {
     }
 
     fn grow_node(&mut self, node_id: NodeId) {
+        // consider costs below this to have made it to the goal
+        let state_cost_epsilon = 1e-5;
         let ids: Vec<NodeId> = Self::generate_children(
             self.input_min_max.clone(),
-            &self.dynamics_tree.get(node_id).unwrap().value().clone(),
+            &self.dynamics_tree.get(node_id).unwrap().value().0.clone(),
         )
-        .map(|dynamics_problem| self.add_node(dynamics_problem))
+        .map(|(cost, dynamics_problem, inputs)| {
+            let id = self.add_node(dynamics_problem, inputs);
+            if cost < state_cost_epsilon {
+                self.solution_nodes.push(id);
+            }
+            id
+        })
         .collect();
 
         ids.into_iter().for_each(|id| {
@@ -118,14 +164,14 @@ impl DynamicsOptimizer {
     /// *must* connect to the goal if it is possible
     fn generate_children(
         input_min_max: (Array1<f64>, Array1<f64>),
-        dynamics: &DynamicsProblem,
-    ) -> impl Iterator<Item = DynamicsProblem> {
+        parent_dynamics: &DynamicsProblem,
+    ) -> impl Iterator<Item = (f64, DynamicsProblem, Array1<f64>)> {
         // Set up solver
         let newton_solver: Newton<f64> = Newton::new();
 
         let middle_input = (input_min_max.0.clone() + input_min_max.1.clone()) / 2.;
         // Run solver
-        let res = Executor::new(dynamics.clone(), newton_solver)
+        let res = Executor::new(parent_dynamics.clone(), newton_solver)
             .configure(|state| state.param(middle_input.clone()).max_iters(10))
             .run()
             .unwrap();
@@ -188,7 +234,7 @@ impl DynamicsOptimizer {
         .map(|params| {
             let nelder_mead_solver = NelderMead::new(params);
 
-            let res = Executor::new(dynamics.clone(), nelder_mead_solver)
+            let res = Executor::new(parent_dynamics.clone(), nelder_mead_solver)
                 .configure(|state| state.max_iters(100))
                 .run()
                 .unwrap();
@@ -204,34 +250,42 @@ impl DynamicsOptimizer {
             most_max,
         ]
         .map(|input| {
-            let mut new_dynamics = dynamics.clone();
+            let mut new_dynamics = parent_dynamics.clone();
             new_dynamics.state = new_dynamics.dynamics_function.get_next_state(
                 &new_dynamics.state,
                 input.view(),
                 new_dynamics.dt,
             );
-            new_dynamics
+            (
+                (new_dynamics.state_cost_function)(&new_dynamics.state, &new_dynamics.set_point),
+                new_dynamics,
+                input.clone(),
+            )
         })
         .into_iter()
     }
 
-    fn add_node(&mut self, dynamics: DynamicsProblem) -> NodeId {
+    fn add_node(&mut self, dynamics: DynamicsProblem, inputs: Array1<f64>) -> NodeId {
         // either overwrite an orphan or add a new
         if let Some(node_id) = self.orphans.pop() {
-            *self.dynamics_tree.get_mut(node_id).unwrap().value() = dynamics;
+            *self.dynamics_tree.get_mut(node_id).unwrap().value() = (dynamics, inputs);
             node_id
         } else {
-            self.dynamics_tree.orphan(dynamics).id()
+            self.dynamics_tree.orphan((dynamics, inputs)).id()
         }
     }
 
     // find the `num_nodes` worst leaves and prune them
     fn prune_nodes(&mut self, num_nodes: usize) {
-        let mut leaves = self.leaves().collect::<Vec<NodeRef<'_, DynamicsProblem>>>();
+        let mut leaves = self
+            .leaves()
+            .collect::<Vec<NodeRef<'_, DynamicsNodeType>>>();
 
         leaves.sort_by(|n1, n2| {
-            let n1_val = (n1.value().state_cost_function)(&n1.value().state, &n1.value().set_point);
-            let n2_val = (n2.value().state_cost_function)(&n2.value().state, &n2.value().set_point);
+            let dynamics_1 = &n1.value().0;
+            let dynamics_2 = &n2.value().0;
+            let n1_val = (dynamics_1.state_cost_function)(&dynamics_1.state, &dynamics_1.set_point);
+            let n2_val = (dynamics_2.state_cost_function)(&dynamics_2.state, &dynamics_2.set_point);
             n1_val.total_cmp(&n2_val)
         });
 
@@ -251,7 +305,7 @@ impl DynamicsOptimizer {
         self.orphans.push(node);
     }
 
-    fn leaves(&self) -> impl Iterator<Item = NodeRef<'_, DynamicsProblem>> {
+    fn leaves(&self) -> impl Iterator<Item = NodeRef<'_, DynamicsNodeType>> {
         self.dynamics_tree
             .nodes()
             .filter(|node| !node.has_children())
@@ -305,6 +359,11 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
             self.prune_nodes(10);
             TreeOptimizationAction::Prune
         };
+
+        while let Some(solution_node) = self.solution_nodes.pop() {
+            self.solutions
+                .push(self.get_inputs_and_trajectory_cost_to_node(mpc_problem, solution_node));
+        }
 
         Ok((state, Some(kv!("action" => format!("{action}");))))
     }
