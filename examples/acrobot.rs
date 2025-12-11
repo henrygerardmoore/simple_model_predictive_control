@@ -5,8 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use argmin::core::{Executor, observers::ObserverMode};
-use argmin_observer_slog::SlogLogger;
+use argmin::core::Executor;
 use ndarray::{Array1, Array2, ArrayView1, array};
 
 use ndarray_linalg::Solve;
@@ -403,11 +402,7 @@ pub fn main() {
 
     let (mut mpc_problem, solver) = get_mpc_problem(initial_state, goal.clone());
     // Run solver
-    let res = Executor::new(mpc_problem, solver)
-        .configure(|state| state.max_iters(1001))
-        .add_observer(SlogLogger::term(), ObserverMode::Every(100))
-        .run()
-        .unwrap();
+    let res = Executor::new(mpc_problem, solver).run().unwrap();
 
     let elapsed = now.elapsed();
     println!(
