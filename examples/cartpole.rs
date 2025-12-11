@@ -117,7 +117,7 @@ fn dynamics_function(state: &Array1<f64>, input: ArrayView1<f64>, dt: Duration) 
 }
 
 fn state_cost(state: &Array1<f64>, setpoint: &Array1<f64>) -> f64 {
-    let weights = array![5., 1., 10., 1.];
+    let weights = array![5., 1., 7.5, 1.];
     ((state - setpoint) * weights).norm()
 }
 
@@ -149,7 +149,7 @@ fn get_mpc_problem(
         &mpc_problem,
         1e-2,
         DynamicsOptimizerSettings {
-            time_limit: Some(Duration::from_secs_f32(5.)),
+            time_limit: Some(Duration::from_secs_f32(0.03)),
             ..Default::default()
         },
     );
@@ -247,7 +247,7 @@ fn plot_tree(tree_segments: Vec<([f64; 2], [f64; 2])>) -> Result<(), Box<dyn std
         .margin(5)
         .x_label_area_size(30)
         .y_label_area_size(30)
-        .build_cartesian_2d(CART_RAIL_BOUNDS.0..CART_RAIL_BOUNDS.1, 0.0..3.1415926535)
+        .build_cartesian_2d(-1.1..1.1, -0.2..3.3)
         .unwrap();
     chart.configure_mesh().draw()?;
 
@@ -256,12 +256,16 @@ fn plot_tree(tree_segments: Vec<([f64; 2], [f64; 2])>) -> Result<(), Box<dyn std
         5,
         GREEN.filled(),
     )))?;
-    for (_point_1, point_2) in tree_segments {
+    for (point_1, point_2) in tree_segments {
         chart.draw_series(std::iter::once(Circle::new(
             (point_2[0], point_2[1]),
             1,
             BLUE.filled(),
         )))?;
+        chart.draw_series(LineSeries::new(
+            once((point_1[0], point_1[1])).chain(once((point_2[0], point_2[1]))),
+            ShapeStyle::from(&RED.mix(0.1)).stroke_width(1),
+        ))?;
     }
 
     root.present()?;
@@ -324,7 +328,7 @@ pub fn main() {
     let (mut mpc_problem, solver) = get_mpc_problem(initial_state, goal.clone());
     // Run solver
     let res = Executor::new(mpc_problem, solver)
-        .configure(|state| state.max_iters(1000))
+        .configure(|state| state.max_iters(100))
         .add_observer(SlogLogger::term(), ObserverMode::Every(50))
         .run()
         .unwrap();

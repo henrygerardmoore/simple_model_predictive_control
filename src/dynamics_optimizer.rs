@@ -124,6 +124,8 @@ pub struct DynamicsOptimizer {
     leaves: BTreeSet<NodeIDAndCost>,
     node_count: usize,
 
+    termination_reason: Option<TerminationReason>,
+
     // solver settings
     branching_factor: usize,
     nelder_mead_iters: usize,
@@ -196,6 +198,7 @@ impl DynamicsOptimizer {
             start_time: Instant::now(),
             time_limit: settings.time_limit,
             node_count: 1,
+            termination_reason: None,
         }
     }
 
@@ -569,7 +572,14 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
             let best_solution = self.solutions.first().unwrap();
             state.best_param = Some(best_solution.0.clone());
             state.best_cost = best_solution.1;
-        } else {
+        }
+
+        // check termination criteria
+        // TODO: look for solutions with trajectory cost under a certain threshold and only terminate then
+        // TODO: fix trajectory with best time returned when terminated without converging
+        if let Some(time_limit) = self.time_limit
+            && self.start_time.elapsed() >= time_limit
+        {
             let Solution(best_leaf_param, best_leaf_cost) = self
                 .get_inputs_and_trajectory_cost_to_node(
                     mpc_problem,
@@ -581,7 +591,12 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
                 state.best_cost = best_leaf_cost;
                 state.best_param = Some(best_leaf_param);
             }
+            self.termination_reason = Some(TerminationReason::Timeout);
         }
+        if !self.solutions.is_empty() {
+            self.termination_reason = Some(TerminationReason::SolverConverged);
+        }
+
         let best_state_cost = self.leaves.first().unwrap().1;
         Ok((
             state,
@@ -595,15 +610,8 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
         &mut self,
         _state: &IterState<Array1<f64>, (), (), (), (), f64>,
     ) -> TerminationStatus {
-        // TODO: look for solutions with trajectory cost under a certain threshold and only terminate then
-        // TODO: fix trajectory with best time returned when terminated without converging
-        if let Some(time_limit) = self.time_limit
-            && self.start_time.elapsed() >= time_limit
-        {
-            return TerminationStatus::Terminated(TerminationReason::Timeout);
-        }
-        if !self.solutions.is_empty() {
-            TerminationStatus::Terminated(TerminationReason::SolverConverged)
+        if let Some(termination_reason) = self.termination_reason.take() {
+            TerminationStatus::Terminated(termination_reason)
         } else {
             TerminationStatus::NotTerminated
         }
