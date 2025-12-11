@@ -135,7 +135,7 @@ pub struct DynamicsOptimizer {
 
 #[derive(Clone)]
 struct Particle {
-    state: Array1<f64>,
+    input: Array1<f64>,
     cost: f64,
 }
 
@@ -381,9 +381,9 @@ impl DynamicsOptimizer {
             .axis_iter(Axis(0))
             .into_par_iter()
             .map(|row| {
-                let state = row.to_owned();
-                let cost = dynamics.cost(&state).unwrap();
-                Particle { state, cost }
+                let input = row.to_owned();
+                let cost = dynamics.cost(&input).unwrap();
+                Particle { input, cost }
             })
             .collect()
     }
@@ -421,7 +421,7 @@ impl DynamicsOptimizer {
         let importance_sample_simplex: Vec<Array1<f64>> = (0..(num_inputs + 1))
             .map(|_| {
                 population[dist.sample(&mut rand::thread_rng())]
-                    .state
+                    .input
                     .clone()
             })
             .collect();
@@ -440,7 +440,7 @@ impl DynamicsOptimizer {
 
         let importance_sample_iter = (0..(branch_factor - 1)).map(move |_| {
             population[dist.sample(&mut rand::thread_rng())]
-                .state
+                .input
                 .clone()
         });
 
