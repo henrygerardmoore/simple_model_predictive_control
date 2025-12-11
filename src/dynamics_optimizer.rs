@@ -16,8 +16,7 @@ pub struct DynamicsOptimizer {
     max_depth: usize,
     // input sequence, cost
     solutions: Vec<(Array1<f64>, f64)>,
-    input_size: usize,
-    input_min_middle_max: (f64, f64, f64),
+    input_min_max: (Array1<f64>, Array1<f64>),
 
     // tree size we try to maintain
     target_size: usize,
@@ -27,7 +26,7 @@ pub struct DynamicsOptimizer {
 }
 
 impl DynamicsOptimizer {
-    pub fn new(input_min: f64, input_max: f64, mpc_problem: &MPCProblem) -> Self {
+    pub fn new(input_min: Array1<f64>, input_max: Array1<f64>, mpc_problem: &MPCProblem) -> Self {
         let max_depth = (mpc_problem.lookahead_duration.as_secs_f64()
             / mpc_problem.sample_period.as_secs_f64())
         .ceil() as usize;
@@ -46,12 +45,14 @@ impl DynamicsOptimizer {
             target_size * 2,
         );
 
+        assert_eq!(input_min.len(), input_max.len());
+        assert_eq!(input_min.len(), mpc_problem.input_size);
+
         Self {
             dynamics_tree,
             max_depth,
             solutions: vec![],
-            input_size: mpc_problem.input_size,
-            input_min_middle_max: (input_min, (input_min + input_max) / 2., input_max),
+            input_min_max: (input_min, input_max),
             target_size,
             orphans: vec![],
         }
@@ -99,8 +100,7 @@ impl DynamicsOptimizer {
 
     fn grow_node(&mut self, node_id: NodeId) {
         let ids: Vec<NodeId> = Self::generate_children(
-            self.input_min_middle_max,
-            self.input_size,
+            self.input_min_max.clone(),
             &self.dynamics_tree.get(node_id).unwrap().value().clone(),
         )
         .map(|dynamics_problem| self.add_node(dynamics_problem))
@@ -114,36 +114,39 @@ impl DynamicsOptimizer {
     /// the most important function in the DynamicsOptimizer
     /// *must* connect to the goal if it is possible
     fn generate_children(
-        input_values: (f64, f64, f64),
-        input_size: usize,
+        input_min_max: (Array1<f64>, Array1<f64>),
         dynamics: &DynamicsProblem,
     ) -> impl Iterator<Item = DynamicsProblem> {
         // Set up solver
         let solver: Newton<f64> = Newton::new();
 
-        let input = Array1::from_vec(vec![input_values.1; input_size]);
+        let middle_input = (input_min_max.0.clone() + input_min_max.1.clone()) / 2.;
         // Run solver
         let res = Executor::new(dynamics.clone(), solver)
-            .configure(|state| state.param(input).max_iters(10))
+            .configure(|state| state.param(middle_input.clone()).max_iters(10))
             .run()
             .unwrap();
-        let optimized_inputs = res.state.best_param.unwrap();
+        let newton_optimized_inputs = res.state.best_param.unwrap();
 
-        let min_input = Array1::from_vec(vec![input_values.0; input_size]);
-        let max_input = Array1::from_vec(vec![input_values.0; input_size]);
+        // TODO: use other optimizers to generate other children
 
-        // turn our 3 inputs into the next states they create
-        [min_input, optimized_inputs, max_input]
-            .map(|input| {
-                let mut new_dynamics = dynamics.clone();
-                new_dynamics.state = new_dynamics.dynamics_function.get_next_state(
-                    &new_dynamics.state,
-                    input.view(),
-                    new_dynamics.dt,
-                );
-                new_dynamics
-            })
-            .into_iter()
+        // turn our inputs into the next states they create
+        [
+            input_min_max.0,
+            middle_input,
+            input_min_max.1,
+            newton_optimized_inputs,
+        ]
+        .map(|input| {
+            let mut new_dynamics = dynamics.clone();
+            new_dynamics.state = new_dynamics.dynamics_function.get_next_state(
+                &new_dynamics.state,
+                input.view(),
+                new_dynamics.dt,
+            );
+            new_dynamics
+        })
+        .into_iter()
     }
 
     fn add_node(&mut self, dynamics: DynamicsProblem) -> NodeId {
