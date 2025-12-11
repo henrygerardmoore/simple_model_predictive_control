@@ -1,6 +1,6 @@
 use std::{
     f64::consts::{PI, TAU},
-    iter::once,
+    iter::{once, repeat},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -25,6 +25,8 @@ const INPUT_SIZE: usize = 1;
 
 // timestep (s)
 const DT: f64 = 0.3; // (s)
+
+const PLOT_SUBDIVISION: usize = 30;
 
 // lookahead time (s)
 const LOOKAHEAD: f64 = 10.0;
@@ -200,7 +202,6 @@ fn get_mpc_problem(
 }
 
 fn plot(trajectory: Array1<Array1<f64>>) -> Result<(), Box<dyn std::error::Error>> {
-    let now = Instant::now();
     // don't render any faster than 100 fps; if we're simulating faster than that this will result in a little slow-mo, which is ok
     let frame_time = ((DT * 1000.).round() as u32).max(50);
     let root = BitMapBackend::gif(OUT_FILE_NAME, (1280, 720), frame_time)?.into_drawing_area();
@@ -240,13 +241,6 @@ fn plot(trajectory: Array1<Array1<f64>>) -> Result<(), Box<dyn std::error::Error
 
         root.present()?;
     }
-
-    let elapsed = now.elapsed();
-    println!(
-        "Plotting took {:.1} seconds. Result has been saved to {}",
-        elapsed.as_secs_f64(),
-        OUT_FILE_NAME
-    );
 
     Ok(())
 }
@@ -302,6 +296,25 @@ fn plot_tree(tree_segments: Vec<([f64; 2], [f64; 2])>) -> Result<(), Box<dyn std
     Ok(())
 }
 
+fn subdivide_trajectory(
+    trajectory: ArrayView1<f64>,
+    input_size: usize,
+    subdivision: usize,
+) -> Array1<f64> {
+    // return an array with each input (of size input_size) repeated `subdivision` times
+    Array1::from_iter(
+        trajectory
+            .exact_chunks(input_size)
+            .into_iter()
+            .flat_map(|input| {
+                repeat(input.iter().map(|input_value| *input_value))
+                    .take(subdivision)
+                    .flatten()
+                    .collect::<Vec<_>>()
+            }),
+    )
+}
+
 const OUT_FILE_NAME: &str = "acrobot.gif";
 
 // see plotters animation example for reference:
@@ -336,11 +349,26 @@ pub fn main() {
         return;
     }
 
+    let now = Instant::now();
+
     plot_tree(res.solver.get_line_segments(0, 1)).unwrap();
 
+    // plot with subdivisions for smoother visualizations
+    let trajectory = res.state.best_param.unwrap();
+    let subdivided_trajectory =
+        subdivide_trajectory(trajectory.view(), INPUT_SIZE, PLOT_SUBDIVISION);
+
     mpc_problem = res.problem.problem.unwrap();
-    let mut trajectory = mpc_problem.calculate_trajectory(res.state.best_param.unwrap().view());
+    mpc_problem.set_dt(Duration::from_secs_f64(DT / (PLOT_SUBDIVISION as f64)));
+    let mut trajectory = mpc_problem.calculate_trajectory(subdivided_trajectory.view());
 
     trajectory_to_plot_format(&mut trajectory);
     plot(trajectory).unwrap();
+
+    let elapsed = now.elapsed();
+    println!(
+        "Plotting took {:.1} seconds. Result has been saved to {}",
+        elapsed.as_secs_f64(),
+        OUT_FILE_NAME
+    );
 }

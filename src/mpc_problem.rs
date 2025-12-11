@@ -102,6 +102,10 @@ impl MPCProblem {
     ) -> f64 {
         (self.dynamics_cost_function)(trajectory, inputs, &self.setpoint)
     }
+
+    pub fn set_dt(&mut self, dt: Duration) {
+        self.sample_period = dt;
+    }
 }
 
 /// Implement `argmin`'s `CostFunction` type.
