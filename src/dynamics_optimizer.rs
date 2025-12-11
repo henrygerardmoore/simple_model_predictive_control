@@ -459,5 +459,35 @@ mod test {
     }
 
     #[test]
-    fn test_prune_nodes() {}
+    fn test_node_logic() {
+        let goal = array![0., 0.];
+        let (_mpc_problem, mut dynamics_optimizer) = get_simple_optimizer(goal);
+        while dynamics_optimizer.dynamics_tree.nodes().len() < 50 {
+            dynamics_optimizer.grow_nodes(10);
+        }
+
+        let num_leaves = dynamics_optimizer.leaves().count();
+        let size = dynamics_optimizer.dynamics_tree.nodes().count();
+
+        dynamics_optimizer.prune_nodes(num_leaves);
+
+        // check that the count of nodes in the tree is correct
+        assert_eq!(
+            dynamics_optimizer
+                .dynamics_tree
+                .nodes()
+                // filter out orphans that have no children (i.e. non-root orphans)
+                .filter(|node| { node.parent().is_some() || node.has_children() })
+                .count(),
+            size - num_leaves
+        );
+
+        // also check that all the previous leaves are now orphans
+        assert_eq!(dynamics_optimizer.orphans.len(), num_leaves);
+
+        // now check that we properly reuse orphans by growing by at least the number of orphans
+        dynamics_optimizer.grow_nodes(num_leaves);
+
+        assert_eq!(dynamics_optimizer.orphans.len(), 0);
+    }
 }
