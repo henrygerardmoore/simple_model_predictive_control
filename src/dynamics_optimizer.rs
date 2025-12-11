@@ -13,7 +13,7 @@ use argmin::{
     kv,
     solver::neldermead::NelderMead,
 };
-use ego_tree::{NodeId, NodeRef, Tree};
+use ego_tree::{NodeId, Tree};
 use ndarray::Array;
 use ndarray::{
     Array1,
@@ -27,8 +27,8 @@ use ndarray_rand::{
 
 use crate::{dynamics_problem::DynamicsProblem, prelude::MPCProblem};
 
-// the state/dynamics problem, the inputs to get from parent to this node, and this node's cost
-type DynamicsNodeType = (DynamicsProblem, Array1<f64>, f64);
+// the state/dynamics problem, the inputs to get from parent to this node, this node's cost, and this node's depth
+type DynamicsNodeType = (DynamicsProblem, Array1<f64>, f64, usize);
 
 #[derive(Clone, Copy)]
 pub struct NodeIDAndCost(NodeId, f64);
@@ -170,7 +170,7 @@ impl DynamicsOptimizer {
             (root_dynamics.state_cost_function)(&root_dynamics.state, &root_dynamics.set_point);
 
         let dynamics_tree = Tree::with_capacity(
-            (root_dynamics, Array1::<f64>::zeros(0), root_cost),
+            (root_dynamics, Array1::<f64>::zeros(0), root_cost, 0),
             target_size * 2,
         );
         let root_id = dynamics_tree.root().id();
@@ -225,17 +225,6 @@ impl DynamicsOptimizer {
         to_return
     }
 
-    fn depth(mut node_ref: NodeRef<'_, DynamicsNodeType>) -> usize {
-        let mut depth = 0;
-
-        while let Some(parent) = node_ref.parent() {
-            node_ref = parent;
-            depth += 1;
-        }
-
-        depth
-    }
-
     fn calculate_and_sort_solutions(&mut self, mpc_problem: &MPCProblem) {
         while let Some(solution_node) = self.solution_nodes.pop() {
             self.solutions
@@ -284,8 +273,7 @@ impl DynamicsOptimizer {
             .iter()
             .filter_map(|id_and_cost| {
                 let node_ref = self.dynamics_tree.get(id_and_cost.0).unwrap();
-                let depth = Self::depth(node_ref);
-                if depth < self.max_depth {
+                if node_ref.value().3 < self.max_depth {
                     let weight = id_and_cost.1.recip();
                     let weight = if weight.is_finite() { weight } else { 1e12 };
                     Some((id_and_cost.0, weight))
@@ -337,10 +325,13 @@ impl DynamicsOptimizer {
         node_id: NodeId,
         children: impl Iterator<Item = (f64, DynamicsProblem, Array1<f64>)>,
     ) {
+        let parent_depth = self.dynamics_tree.get(node_id).unwrap().value().3;
+        let child_depth = parent_depth + 1;
         // consider costs below this to have made it to the goal
         let ids: Vec<NodeId> = children
             .map(|(cost, dynamics_problem, inputs)| {
                 let id = self.add_node(dynamics_problem, inputs, cost);
+                self.dynamics_tree.get_mut(id).unwrap().value().3 = child_depth;
                 if cost < self.state_cost_epsilon {
                     self.solution_nodes.push(id);
                 }
@@ -469,15 +460,16 @@ impl DynamicsOptimizer {
         })
     }
 
+    // the depth of the added node will be set when attached
     fn add_node(&mut self, dynamics: DynamicsProblem, inputs: Array1<f64>, cost: f64) -> NodeId {
         // either overwrite an orphan or add a new
         self.node_count += 1;
         if let Some(node_id) = self.orphans.pop() {
-            *self.dynamics_tree.get_mut(node_id).unwrap().value() = (dynamics, inputs, cost);
+            *self.dynamics_tree.get_mut(node_id).unwrap().value() = (dynamics, inputs, cost, 0);
             self.leaves.insert(NodeIDAndCost(node_id, cost));
             node_id
         } else {
-            let id = self.dynamics_tree.orphan((dynamics, inputs, cost)).id();
+            let id = self.dynamics_tree.orphan((dynamics, inputs, cost, 0)).id();
             self.leaves.insert(NodeIDAndCost(id, cost));
             id
         }
