@@ -9,6 +9,7 @@ license = "MIT OR Apache-2.0"
 keywords = ["mpc","model-predictive-control","model-predictive","argmin","nonlinear","control"]
 
 [dependencies]
+approx = "0.5.1"
 argmin = {version="0.11.0", features=["rayon"]}
 argmin-math = {version = "0.5.1", features = ["ndarray_latest"]}
 argmin-observer-slog = "0.2.0"
