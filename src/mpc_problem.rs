@@ -113,3 +113,15 @@ impl CostFunction for MPCProblem {
         params.par_iter().map(|p| self.cost(p.borrow())).collect()
     }
 }
+
+#[cfg(test)]
+mod test {
+    #[test]
+    fn test_trajectory_calculation() {}
+    #[test]
+    fn test_trajectory_cost() {}
+    #[test]
+    fn test_cost() {}
+    #[test]
+    fn test_optimization() {}
+}

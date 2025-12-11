@@ -125,3 +125,23 @@ impl Hessian for DynamicsProblem {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod test {
+    #[test]
+    fn test_gradient_continuous() {}
+    #[test]
+    fn test_jacobian_continuous() {}
+    #[test]
+    fn test_hessian_continuous() {}
+    #[test]
+    fn test_dynamics_optimization_continuous() {}
+    #[test]
+    fn test_gradient_discrete() {}
+    #[test]
+    fn test_jacobian_discrete() {}
+    #[test]
+    fn test_hessian_discrete() {}
+    #[test]
+    fn test_dynamics_optimization_discrete() {}
+}

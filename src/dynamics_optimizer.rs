@@ -252,3 +252,12 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    #[test]
+    fn test_grow_node_finds_goal() {}
+
+    #[test]
+    fn test_prune_nodes() {}
+}
