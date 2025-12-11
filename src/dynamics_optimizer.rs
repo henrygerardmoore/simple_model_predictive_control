@@ -1,11 +1,9 @@
-use std::{
-    fmt::{self, Display, Formatter},
-    iter::once,
-};
+use std::fmt::{self, Display, Formatter};
 
 use argmin::{
-    core::{Error, IterState, KV, Problem, Solver, TerminationReason, TerminationStatus},
+    core::{Error, Executor, IterState, KV, Problem, Solver, TerminationReason, TerminationStatus},
     kv,
+    solver::newton::Newton,
 };
 use ego_tree::{NodeId, NodeRef, Tree};
 use ndarray::Array1;
@@ -19,6 +17,7 @@ pub struct DynamicsOptimizer {
     // input sequence, cost
     solutions: Vec<(Array1<f64>, f64)>,
     input_size: usize,
+    input_min_middle_max: (f64, f64, f64),
 
     // tree size we try to maintain
     target_size: usize,
@@ -51,10 +50,13 @@ impl DynamicsOptimizer {
     }
 
     fn grow_node(&mut self, node_id: NodeId) {
-        let ids: Vec<NodeId> =
-            Self::generate_children(&self.dynamics_tree.get(node_id).unwrap().value().clone())
-                .map(|dynamics_problem| self.add_node(dynamics_problem))
-                .collect();
+        let ids: Vec<NodeId> = Self::generate_children(
+            self.input_min_middle_max,
+            self.input_size,
+            &self.dynamics_tree.get(node_id).unwrap().value().clone(),
+        )
+        .map(|dynamics_problem| self.add_node(dynamics_problem))
+        .collect();
 
         ids.into_iter().for_each(|id| {
             self.dynamics_tree.get_mut(node_id).unwrap().append_id(id);
@@ -63,9 +65,37 @@ impl DynamicsOptimizer {
 
     /// the most important function in the DynamicsOptimizer
     /// *must* connect to the goal if it is possible
-    fn generate_children(dynamics: &DynamicsProblem) -> impl Iterator<Item = DynamicsProblem> {
-        // TODO: generate children with cost function
-        once(dynamics.clone())
+    fn generate_children(
+        input_values: (f64, f64, f64),
+        input_size: usize,
+        dynamics: &DynamicsProblem,
+    ) -> impl Iterator<Item = DynamicsProblem> {
+        // Set up solver
+        let solver: Newton<f64> = Newton::new();
+
+        let input = Array1::from_vec(vec![input_values.1; input_size]);
+        // Run solver
+        let res = Executor::new(dynamics.clone(), solver)
+            .configure(|state| state.param(input).max_iters(10))
+            .run()
+            .unwrap();
+        let optimized_inputs = res.state.best_param.unwrap();
+
+        let min_input = Array1::from_vec(vec![input_values.0; input_size]);
+        let max_input = Array1::from_vec(vec![input_values.0; input_size]);
+
+        // turn our 3 inputs into the next states they create
+        [min_input, optimized_inputs, max_input]
+            .map(|input| {
+                let mut new_dynamics = dynamics.clone();
+                new_dynamics.state = new_dynamics.dynamics_function.get_next_state(
+                    &new_dynamics.state,
+                    input.view(),
+                    new_dynamics.dt,
+                );
+                new_dynamics
+            })
+            .into_iter()
     }
 
     fn add_node(&mut self, dynamics: DynamicsProblem) -> NodeId {

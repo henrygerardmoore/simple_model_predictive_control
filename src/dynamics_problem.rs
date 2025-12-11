@@ -1,7 +1,8 @@
 use core::f64;
 use std::{sync::Arc, time::Duration};
 
-use argmin::core::{Hessian, Jacobian};
+use argmin::core::{Gradient, Hessian, Jacobian};
+use argmin_math::ArgminL2Norm;
 use finitediff::ndarr;
 use ndarray::{
     Array1, Array2, ArrayView1,
@@ -53,6 +54,24 @@ pub struct DynamicsProblem {
     pub state: Array1<f64>,
     pub set_point: Arc<Array1<f64>>,
     pub dt: Duration,
+}
+
+// gradient of distance from setpoint wrt
+impl Gradient for DynamicsProblem {
+    type Param = Array1<f64>;
+
+    type Gradient = Array1<f64>;
+
+    fn gradient(&self, param: &Self::Param) -> Result<Self::Gradient, argmin_math::Error> {
+        let distance_from_setpoint = |inputs: &Self::Param| {
+            let next_state =
+                self.dynamics_function
+                    .get_next_state(&self.state, inputs.view(), self.dt);
+            Ok((next_state - (*self.set_point).clone()).l2_norm())
+        };
+        let grad_forward = ndarr::forward_diff(&distance_from_setpoint);
+        grad_forward(param)
+    }
 }
 
 impl Jacobian for DynamicsProblem {
