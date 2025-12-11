@@ -94,7 +94,7 @@ impl Default for DynamicsOptimizerSettings {
         Self {
             branching_factor: 4,
             nelder_mead_iters: 1000,
-            particle_count: 50,
+            particle_count: 100,
             target_size_override: None,
             iter_grow_number: 10,
             iter_prune_number: 10,
@@ -279,9 +279,7 @@ impl DynamicsOptimizer {
 
     // find `num_nodes` leaves via importance sampling and grow them
     fn grow_nodes(&mut self, num_nodes: usize) -> bool {
-        // TODO: weight by 1/cost + distance from node state space centroid, add running node centroid calculation
-        // TODO: try weighting whole branch
-        let (ids, weights): (Vec<_>, Vec<_>) = self
+        let eligible_leaves: Vec<_> = self
             .leaves
             .iter()
             .filter_map(|id_and_cost| {
@@ -289,27 +287,21 @@ impl DynamicsOptimizer {
                 let depth = Self::depth(node_ref);
                 if depth < self.max_depth {
                     let weight = id_and_cost.1.recip();
-                    if weight.is_finite() {
-                        Some((id_and_cost.0, weight))
-                    } else {
-                        // if the cost is 0 or otherwise has a non-finite reciprocal then just make the weight huge
-                        Some((id_and_cost.0, 1e12))
-                    }
+                    let weight = if weight.is_finite() { weight } else { 1e12 };
+                    Some((id_and_cost.0, weight))
                 } else {
                     None
                 }
             })
-            .unzip();
+            .collect();
 
-        // TODO: add option to terminate in this case
-        let Ok(dist) = WeightedIndex::new(weights.iter()) else {
-            // we are out of leaves of suitable depth
+        let Ok(dist) = WeightedIndex::new(eligible_leaves.iter().map(|(_, w)| w)) else {
             self.prune_nodes(num_nodes);
             return false;
         };
 
         let best_leaf_ids: Vec<NodeId> = (0..num_nodes)
-            .map(|_| ids[dist.sample(&mut rand::thread_rng())])
+            .map(|_| eligible_leaves[dist.sample(&mut rand::thread_rng())].0)
             .collect();
 
         self.grow_node_ids(best_leaf_ids);

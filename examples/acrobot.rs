@@ -321,7 +321,7 @@ pub fn main() {
         let (mut mpc_problem, solver) = get_mpc_problem(initial_state.clone(), goal.clone());
         // Run solver
         let res = Executor::new(mpc_problem, solver)
-            .configure(|state| state.max_iters(1000))
+            .configure(|state| state.max_iters(2000))
             .add_observer(SlogLogger::term(), ObserverMode::Every(50))
             .run()
             .unwrap();
