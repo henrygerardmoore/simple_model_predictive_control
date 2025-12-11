@@ -595,6 +595,7 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
         _state: &IterState<Array1<f64>, (), (), (), (), f64>,
     ) -> TerminationStatus {
         // TODO: look for solutions with trajectory cost under a certain threshold and only terminate then
+        // TODO: fix trajectory with best time returned when terminated without converging
         if let Some(time_limit) = self.time_limit
             && self.start_time.elapsed() >= time_limit
         {

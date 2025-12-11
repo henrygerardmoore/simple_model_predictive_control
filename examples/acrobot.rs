@@ -18,7 +18,7 @@ use simple_model_predictive_control::{
 };
 
 // link 1 angle CCW from right (rad), link 2 angle of deflection CCW *from link 1* (rad), link 1 angular velocity (rad/s), link 2 angular velocity (rad/s)
-const STATE_SIZE: usize = 4;
+// const STATE_SIZE: usize = 4;
 
 // torque on link 1 (N*m)
 const INPUT_SIZE: usize = 1;
@@ -115,30 +115,8 @@ fn state_derivative(state: &Array1<f64>, input: ArrayView1<f64>) -> Array1<f64> 
     ]
 }
 
-// integrate with RK4 instead of explicit euler for stability
-fn rk4_step(state: &Array1<f64>, input: ArrayView1<f64>, dt: f64) -> Array1<f64> {
-    let k1 = state_derivative(state, input);
-
-    let mut tmp = array![0., 0., 0., 0.];
-    for i in 0..STATE_SIZE {
-        tmp[i] = state[i] + 0.5 * dt * k1[i];
-    }
-    let k2 = state_derivative(&tmp, input);
-
-    for i in 0..STATE_SIZE {
-        tmp[i] = state[i] + 0.5 * dt * k2[i];
-    }
-    let k3 = state_derivative(&tmp, input);
-
-    for i in 0..STATE_SIZE {
-        tmp[i] = state[i] + dt * k3[i];
-    }
-    let k4 = state_derivative(&tmp, input);
-
-    let mut new_state = array![0., 0., 0., 0.];
-    for i in 0..STATE_SIZE {
-        new_state[i] = state[i] + dt * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]) / 6.0;
-    }
+fn euler_step(state: &Array1<f64>, input: ArrayView1<f64>, dt: f64) -> Array1<f64> {
+    let mut new_state = state + dt * state_derivative(state, input);
     // wrap angles
     new_state[0] = new_state[0].rem_euclid(TAU);
     new_state[1] = new_state[1].rem_euclid(TAU);
@@ -154,12 +132,7 @@ fn dynamics_function(state: &Array1<f64>, input: ArrayView1<f64>, dt: Duration) 
     if dt <= 0. {
         return state.clone();
     }
-    let n_rk4_steps = 1;
-    let mut state = state.clone();
-    for _ in 0..n_rk4_steps {
-        state = rk4_step(&state, input.view(), dt / (n_rk4_steps as f64));
-    }
-    state
+    euler_step(&state, input.view(), dt)
 }
 
 fn state_cost(state: &Array1<f64>, _setpoint: &Array1<f64>) -> f64 {
