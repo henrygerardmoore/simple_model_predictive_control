@@ -8,6 +8,18 @@ I created this library for a simple, pure-rust MPC implementation with no code g
 
 I originally intended to use `std::autodiff` (check out its [tracking issue](https://github.com/rust-lang/rust/issues/124509) if you're interested in this) with [optimization-engine](https://github.com/alphaville/optimization-engine), but found the necessity of using an experimental compiler to be prohibitive to development.
 
+## Demonstrations
+
+![acrobot demo](demos/acrobot.gif)
+Acrobot
+
+![cartpole demo](demos/cartpole.gif)
+Cartpole
+
+![MPC tree](demos/tree.bmp)
+A slice of the 4D tree showing the MPC optimization problem sampling the state space.
+Blue dots are states; faint red lines are the state connections; the green dot is the goal.
+
 ## Examples
 
 Try `cargo run --profile heavy_optimization --example acrobot`, `cargo run --profile heavy_optimization --example cartpole`, or `cargo run --example simple_continuous` to see the examples.
