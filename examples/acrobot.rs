@@ -94,7 +94,8 @@ fn gravity_torque_matrix(state: &Array1<f64>) -> Array2<f64> {
 }
 
 // return function's derivatives at a given state and with a given input
-fn state_derivative(state: &Array1<f64>, input: ArrayView1<f64>) -> Array1<f64> {
+#[allow(unused, reason = "Optimized but left as a simpler reference")]
+fn unoptimized_state_derivative(state: &Array1<f64>, input: ArrayView1<f64>) -> Array1<f64> {
     let fx = input[0].clamp(-INPUT_MAX, INPUT_MAX);
     // input mapping matrix
     let b = array![[0.], [1.]];
@@ -117,15 +118,57 @@ fn state_derivative(state: &Array1<f64>, input: ArrayView1<f64>) -> Array1<f64> 
     ]
 }
 
+fn state_derivative(state: &Array1<f64>, input: ArrayView1<f64>) -> Array1<f64> {
+    let theta2 = state[1];
+    let omega1 = state[2];
+    let omega2 = state[3];
+    let fx = input[0].clamp(-INPUT_MAX, INPUT_MAX);
+
+    // Pre-compute common trigonometric values
+    let cos_theta2 = theta2.cos();
+    let sin_theta2 = theta2.sin();
+    let theta1_plus_theta2 = state[0] + theta2;
+    let cos_theta1 = state[0].cos();
+    let cos_theta1_plus_theta2 = theta1_plus_theta2.cos();
+
+    // Pre-compute common terms
+    let m2_lc2_sq = M2 * LC2.powi(2);
+    let m2_l1_lc2 = M2 * L1 * LC2;
+    let m2_l1_lc2_cos_theta2 = m2_l1_lc2 * cos_theta2;
+    let i1_plus_i2 = I1 + I2;
+
+    // Mass matrix elements (symmetric, so only compute 3 unique values)
+    let m11 = M1 * LC1.powi(2)
+        + M2 * (L1.powi(2) + LC2.powi(2) + 2. * L1 * LC2 * cos_theta2)
+        + i1_plus_i2;
+    let m12 = m2_lc2_sq + m2_l1_lc2_cos_theta2 + I2;
+    let m22 = m2_lc2_sq + I2;
+
+    // Coriolis terms
+    let c1 = -m2_l1_lc2 * sin_theta2 * (omega2.powi(2) + 2. * omega2 * omega1);
+    let c2 = m2_l1_lc2 * sin_theta2 * omega1.powi(2);
+
+    // Gravity torques
+    let tau1 =
+        (M1 * LC1 + M2 * L1) * GRAVITY * cos_theta1 + M2 * LC2 * GRAVITY * cos_theta1_plus_theta2;
+    let tau2 = M2 * LC2 * GRAVITY * cos_theta1_plus_theta2;
+
+    // forcing terms
+    let rhs1 = tau1 + fx - c1;
+    let rhs2 = tau2 - c2;
+
+    // Solve 2x2 system analytically
+    let det = m11 * m22 - m12 * m12;
+    let det_inv = 1.0 / det;
+
+    let alpha1 = det_inv * (m22 * rhs1 - m12 * rhs2);
+    let alpha2 = det_inv * (-m12 * rhs1 + m11 * rhs2);
+
+    array![omega1, omega2, alpha1, alpha2,]
+}
+
 fn euler_step(state: &Array1<f64>, input: ArrayView1<f64>, dt: f64) -> Array1<f64> {
-    let mut new_state = state + dt * state_derivative(state, input);
-    // wrap angles
-    new_state[0] = new_state[0].rem_euclid(TAU);
-    new_state[1] = new_state[1].rem_euclid(TAU);
-    // don't let angular velocity get too high
-    new_state[2] = new_state[2].clamp(-20., 20.);
-    new_state[3] = new_state[3].clamp(-20., 20.);
-    new_state
+    state + dt * state_derivative(state, input)
 }
 
 // dynamics for this example are from https://courses.ece.ucsb.edu/ECE179/179D_S12Byl/hw/acrobot_swingup.pdf
