@@ -149,7 +149,7 @@ pub fn main() {
             .run()
             .unwrap();
 
-        let (mpc_problem, _) = get_mpc_problem(initial_state, goal.clone());
+        let mpc_problem = res.problem.problem.unwrap();
 
         // update start position and append to overall trajectory
         let this_trajectory =

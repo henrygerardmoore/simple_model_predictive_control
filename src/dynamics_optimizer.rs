@@ -7,10 +7,11 @@ use std::{
 use argmin::{
     core::{Error, Executor, IterState, KV, Problem, Solver, TerminationReason, TerminationStatus},
     kv,
-    solver::{linesearch::HagerZhangLineSearch, neldermead::NelderMead, quasinewton::LBFGS},
+    solver::particleswarm::ParticleSwarm,
 };
 use ego_tree::{NodeId, NodeRef, Tree};
 use ndarray::Array1;
+use rand::distr::{Distribution, weighted::WeightedIndex};
 
 use crate::{dynamics_problem::DynamicsProblem, prelude::MPCProblem};
 
@@ -18,10 +19,10 @@ use crate::{dynamics_problem::DynamicsProblem, prelude::MPCProblem};
 type DynamicsNodeType = (DynamicsProblem, Array1<f64>, f64);
 
 #[derive(Clone, Copy)]
-pub struct NodeAndCost(NodeId, f64);
+pub struct NodeIDAndCost(NodeId, f64);
 
 // we don't care about node id in comparison
-impl PartialEq for NodeAndCost {
+impl PartialEq for NodeIDAndCost {
     fn eq(&self, other: &Self) -> bool {
         if self.1 == other.1 {
             // tie-break on node ID
@@ -32,14 +33,14 @@ impl PartialEq for NodeAndCost {
     }
 }
 
-impl Eq for NodeAndCost {}
+impl Eq for NodeIDAndCost {}
 
-impl PartialOrd for NodeAndCost {
+impl PartialOrd for NodeIDAndCost {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
-impl Ord for NodeAndCost {
+impl Ord for NodeIDAndCost {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         match self.1.total_cmp(&other.1) {
             // tie-break on node ID
@@ -67,7 +68,7 @@ pub struct DynamicsOptimizer {
 
     state_cost_epsilon: f64,
 
-    leaves: BTreeSet<NodeAndCost>,
+    leaves: BTreeSet<NodeIDAndCost>,
 }
 
 impl DynamicsOptimizer {
@@ -99,6 +100,7 @@ impl DynamicsOptimizer {
             (root_dynamics, Array1::<f64>::zeros(0), root_cost),
             target_size * 2,
         );
+        let root_id = dynamics_tree.root().id();
 
         assert_eq!(input_min.len(), input_max.len());
         assert_eq!(input_min.len(), mpc_problem.input_size);
@@ -112,7 +114,7 @@ impl DynamicsOptimizer {
             orphans: vec![],
             solution_nodes: vec![],
             state_cost_epsilon: solution_cost_tolerance,
-            leaves: BTreeSet::new(),
+            leaves: BTreeSet::from([NodeIDAndCost(root_id, root_cost)]),
         }
     }
 
@@ -187,7 +189,7 @@ impl DynamicsOptimizer {
         let best_leaf_ids: Vec<NodeId> = self
             .leaves
             .iter()
-            .filter_map(|NodeAndCost(node_id, _cost)| {
+            .filter_map(|NodeIDAndCost(node_id, _cost)| {
                 let node_ref = self.dynamics_tree.get(*node_id).unwrap();
                 let depth = Self::depth(node_ref);
                 if depth < self.max_depth {
@@ -210,6 +212,7 @@ impl DynamicsOptimizer {
             self.input_min_max.clone(),
             &self.dynamics_tree.get(node_id).unwrap().value().0.clone(),
             self.state_cost_epsilon,
+            4,
         )
         .map(|(cost, dynamics_problem, inputs)| {
             let id = self.add_node(dynamics_problem.clone(), inputs, cost);
@@ -223,7 +226,7 @@ impl DynamicsOptimizer {
 
         // now remove node_id from leaves since it has children
         let this_cost = self.dynamics_tree.get(node_id).unwrap().value().2;
-        self.leaves.remove(&NodeAndCost(node_id, this_cost));
+        self.leaves.remove(&NodeIDAndCost(node_id, this_cost));
 
         ids.into_iter().for_each(|id| {
             self.dynamics_tree.get_mut(node_id).unwrap().append_id(id);
@@ -236,116 +239,59 @@ impl DynamicsOptimizer {
         input_min_max: (Array1<f64>, Array1<f64>),
         parent_dynamics: &DynamicsProblem,
         epsilon: f64,
+        branch_factor: usize,
     ) -> impl Iterator<Item = (f64, DynamicsProblem, Array1<f64>)> {
-        // Set up solver
-        let linesearch = HagerZhangLineSearch::new();
-        let initial_solver = LBFGS::new(linesearch, 7);
+        let solver = ParticleSwarm::new((input_min_max.0.clone(), input_min_max.1.clone()), 1000);
 
-        let middle_input = (input_min_max.0.clone() + input_min_max.1.clone()) / 2.;
-        // Run solver
-        let res = Executor::new(parent_dynamics.clone(), initial_solver)
-            .configure(|state| {
-                state
-                    .param(middle_input.clone())
-                    .max_iters(10)
-                    .target_cost(epsilon)
-            })
+        let res = Executor::new(parent_dynamics.clone(), solver)
+            .configure(|state| state.max_iters(10).target_cost(epsilon))
             .run()
             .unwrap();
-        let newton_optimized_inputs = res.state.best_param.unwrap();
 
-        let num_inputs = input_min_max.0.len();
+        let optimized_input = res.state.best_individual.unwrap().position;
 
-        // construct the n+1 points of the nelder-mead simplex, using the newton optimized answer as the +1
-        let one_min_simplex: Vec<Array1<f64>> = once(newton_optimized_inputs.clone())
-            .chain((0..num_inputs).map(|nonzero_index| {
-                Array1::from_iter((0..num_inputs).map(|index| {
-                    if index == nonzero_index {
-                        input_min_max.0[index]
-                    } else {
-                        0.
-                    }
-                }))
-            }))
-            .collect();
-        // let one_max_simplex: Vec<Array1<f64>> = once(newton_optimized_inputs.clone())
-        //     .chain((0..num_inputs).map(|nonzero_index| {
-        //         Array1::from_iter((0..num_inputs).map(|index| {
-        //             if index == nonzero_index {
-        //                 input_min_max.1[index]
-        //             } else {
-        //                 0.
-        //             }
-        //         }))
-        //     }))
-        //     .collect();
-        // let most_min_simplex: Vec<Array1<f64>> = once(newton_optimized_inputs.clone())
-        //     .chain((0..num_inputs).map(|zero_index| {
-        //         Array1::from_iter((0..num_inputs).map(|index| {
-        //             if index == zero_index {
-        //                 0.
-        //             } else {
-        //                 input_min_max.0[index]
-        //             }
-        //         }))
-        //     }))
-        //     .collect();
-        // let most_max_simplex: Vec<Array1<f64>> = once(newton_optimized_inputs.clone())
-        //     .chain((0..num_inputs).map(|zero_index| {
-        //         Array1::from_iter((0..num_inputs).map(|index| {
-        //             if index == zero_index {
-        //                 0.
-        //             } else {
-        //                 input_min_max.1[index]
-        //             }
-        //         }))
-        //     }))
-        //     .collect();
+        // now importance sample to get the other `branch_factor - 1` inputs
+        let population = res.state.population.unwrap();
+        let dist = WeightedIndex::new(population.iter().map(|particle| {
+            let particle_weight = particle.cost.recip();
+            if particle_weight.is_finite() {
+                particle_weight
+            } else {
+                // particle cost is probably 0 or very close to 0, just return a huge weight so it gets selected
+                1e12
+            }
+        }))
+        .unwrap();
+        let importance_sample_iter = (0..(branch_factor - 1))
+            .map(move |_| population[dist.sample(&mut rand::rng())].position.clone());
 
-        let [one_min] = [one_min_simplex].map(|params| {
-            let nelder_mead_solver = NelderMead::new(params);
+        let inputs_iter = once(optimized_input).chain(importance_sample_iter);
 
-            let res = Executor::new(parent_dynamics.clone(), nelder_mead_solver)
-                .configure(|state| state.max_iters(10))
-                .run()
-                .unwrap();
-            res.state.best_param.unwrap()
-        });
-
-        // turn our inputs into the next states they create
-        let mut next_states =
-            [one_min, input_min_max.0, input_min_max.1, middle_input].map(|input| {
-                let mut new_dynamics = parent_dynamics.clone();
-                new_dynamics.state = new_dynamics.dynamics_function.get_next_state(
-                    &new_dynamics.state,
-                    input.view(),
-                    new_dynamics.dt,
-                );
-                (
-                    (new_dynamics.state_cost_function)(
-                        &new_dynamics.state,
-                        &new_dynamics.set_point,
-                    ),
-                    new_dynamics,
-                    input.clone(),
-                )
-            });
-
-        let branch_factor = 4;
-        // return the `branch_factor` lowest-cost children
-        next_states.sort_by(|(cost1, _, _), (cost2, _, _)| cost1.total_cmp(cost2));
-        next_states.into_iter().take(branch_factor)
+        // turn our selected inputs into the next states they create
+        inputs_iter.map(|input| {
+            let mut new_dynamics = parent_dynamics.clone();
+            new_dynamics.state = new_dynamics.dynamics_function.get_next_state(
+                &new_dynamics.state,
+                input.view(),
+                new_dynamics.dt,
+            );
+            (
+                (new_dynamics.state_cost_function)(&new_dynamics.state, &new_dynamics.set_point),
+                new_dynamics,
+                input.clone(),
+            )
+        })
     }
 
     fn add_node(&mut self, dynamics: DynamicsProblem, inputs: Array1<f64>, cost: f64) -> NodeId {
         // either overwrite an orphan or add a new
         if let Some(node_id) = self.orphans.pop() {
             *self.dynamics_tree.get_mut(node_id).unwrap().value() = (dynamics, inputs, cost);
-            self.leaves.insert(NodeAndCost(node_id, cost));
+            self.leaves.insert(NodeIDAndCost(node_id, cost));
             node_id
         } else {
             let id = self.dynamics_tree.orphan((dynamics, inputs, cost)).id();
-            self.leaves.insert(NodeAndCost(id, cost));
+            self.leaves.insert(NodeIDAndCost(id, cost));
             id
         }
     }
@@ -383,13 +329,14 @@ impl DynamicsOptimizer {
             panic!("Trying to prune an orphan. This indicates a bug");
         };
 
-        self.leaves.remove(&NodeAndCost(node_id, node.value().2));
+        self.leaves.remove(&NodeIDAndCost(node_id, node.value().2));
         node.detach();
         self.orphans.push(node_id);
         let parent = self.dynamics_tree.get(parent_id).unwrap();
         if !parent.has_children() {
             // it's now a leaf, add it
-            self.leaves.insert(NodeAndCost(parent_id, parent.value().2));
+            self.leaves
+                .insert(NodeIDAndCost(parent_id, parent.value().2));
         }
     }
 
@@ -458,6 +405,16 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
             state.best_param = Some(self.solutions[0].0.clone());
             state.best_cost = self.solutions[0].1;
         }
+
+        println!(
+            "Number of nodes: {}",
+            self.dynamics_tree
+                .nodes()
+                .filter(|node| { node.has_children() || node.parent().is_some() })
+                .count()
+        );
+        println!("Number of leaves: {}", self.leaves.len());
+        println!("Best leaf cost: {}", self.leaves.first().unwrap().1);
 
         Ok((state, Some(kv!("action" => format!("{action}");))))
     }
