@@ -62,10 +62,6 @@ impl DynamicsFunction {
 /// f(state, setpoint) -> cost
 pub type StateCostFunction = dyn Fn(&Array1<f64>, &Array1<f64>) -> f64 + Send + Sync;
 
-/// f(state, input, setpoint) -> cost
-pub type DynamicsCostFunction =
-    dyn Fn(&Array1<f64>, ArrayView1<f64>, &Array1<f64>) -> f64 + Send + Sync;
-
 #[derive(Clone)]
 pub struct DynamicsProblem {
     pub dynamics_function: DynamicsFunction,

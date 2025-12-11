@@ -7,10 +7,11 @@ use ndarray::{
     parallel::prelude::{IntoParallelRefIterator, ParallelIterator},
 };
 
-use crate::dynamics_problem::{
-    DynamicsCostFunction, DynamicsFunction, DynamicsProblem, StateCostFunction,
-};
+use crate::dynamics_problem::{DynamicsFunction, DynamicsProblem, StateCostFunction};
 
+/// f(trajectory, inputs, setpoint) -> cost
+pub type TrajectoryCostFunction =
+    dyn Fn(&Array1<Array1<f64>>, &Array1<f64>, &Array1<f64>) -> f64 + Send + Sync;
 /// Trait indicating that an argmin problem has a dynamics subproblem, used in DynamicsOptimizer Solver
 pub trait DynamicsSubProblem {
     fn get_dynamics(&self, state: Array1<f64>) -> DynamicsProblem;
@@ -28,7 +29,7 @@ pub struct MPCProblem {
     pub(crate) input_size: usize,
 
     pub(crate) state_cost_function: Arc<StateCostFunction>,
-    pub(crate) dynamics_cost_function: Box<DynamicsCostFunction>,
+    pub(crate) dynamics_cost_function: Box<TrajectoryCostFunction>,
 }
 
 impl DynamicsSubProblem for MPCProblem {
@@ -61,7 +62,7 @@ impl MPCProblem {
         dynamics_function: DynamicsFunction,
         input_size: usize,
         state_cost_function: Arc<StateCostFunction>,
-        dynamics_cost_function: Box<DynamicsCostFunction>,
+        dynamics_cost_function: Box<TrajectoryCostFunction>,
     ) -> Self {
         Self {
             setpoint: Arc::new(setpoint),
@@ -99,13 +100,7 @@ impl MPCProblem {
         trajectory: &Array1<Array1<f64>>,
         inputs: &Array1<f64>,
     ) -> f64 {
-        trajectory
-            .iter()
-            .zip(inputs.exact_chunks(self.input_size))
-            .fold(0., |accumulated_cost, (state, input)| {
-                accumulated_cost
-                    + (self.dynamics_cost_function)(state, input.view(), &self.setpoint)
-            })
+        (self.dynamics_cost_function)(trajectory, inputs, &self.setpoint)
     }
 }
 
@@ -138,12 +133,116 @@ impl CostFunction for MPCProblem {
 
 #[cfg(test)]
 mod test {
+    use std::{sync::Arc, time::Duration};
+
+    use argmin::{
+        core::{CostFunction, Executor},
+        solver::neldermead::NelderMead,
+    };
+    use ndarray::{Array1, ArrayView1, array};
+    use ndarray_linalg::Norm;
+
+    use crate::{dynamics_problem::DynamicsFunction, prelude::MPCProblem};
+
+    const DT: f64 = 1.;
+    const LOOKAHEAD: f64 = 10.;
+    const INITIAL_POS: f64 = 1.0;
+    const INITIAL_VEL: f64 = 0.0;
+
+    // input is x acceleration, state is (x, vx)
+    fn simple_continuous_dynamics(state: &Array1<f64>, input: ArrayView1<f64>) -> Array1<f64> {
+        array![state[1], input[0]]
+    }
+
+    fn simple_state_cost_function(state: &Array1<f64>, setpoint: &Array1<f64>) -> f64 {
+        (state - setpoint).norm()
+    }
+
+    // punish deviation of the last state from the goal and the input magnitude slightly
+    fn simple_dynamics_cost_function(
+        state: &Array1<Array1<f64>>,
+        inputs: &Array1<f64>,
+        setpoint: &Array1<f64>,
+    ) -> f64 {
+        (state.last().unwrap() - setpoint).norm()
+            + 0.0000001 * inputs.map(|input| input.abs()).sum()
+    }
+
+    fn get_simple_problem(goal: Array1<f64>) -> MPCProblem {
+        MPCProblem {
+            setpoint: Arc::new(goal),
+            current_state: array![INITIAL_POS, INITIAL_VEL],
+            sample_period: Duration::from_secs_f64(DT),
+            lookahead_duration: Duration::from_secs_f64(LOOKAHEAD),
+            dynamics_function: DynamicsFunction::Continuous(Arc::new(&simple_continuous_dynamics)),
+            input_size: 1,
+            state_cost_function: Arc::new(&simple_state_cost_function),
+            dynamics_cost_function: Box::new(&simple_dynamics_cost_function),
+        }
+    }
     #[test]
-    fn test_trajectory_calculation() {}
+    fn test_trajectory_calculation() {
+        let input = -0.314159;
+        let mpc_problem = get_simple_problem(array![0., 0.]);
+        let trajectory = mpc_problem.calculate_trajectory(&array![input]);
+        let expected_endpoint = array![
+            INITIAL_POS + 0.5 * input * DT.powi(2),
+            INITIAL_VEL + input * DT
+        ];
+        assert!((trajectory.last().unwrap() - expected_endpoint).norm() < 1e-3);
+    }
+
     #[test]
-    fn test_trajectory_cost() {}
+    fn test_trajectory_cost() {
+        let mpc_problem = get_simple_problem(array![INITIAL_POS, INITIAL_VEL]);
+        let cost = mpc_problem.cost(&array![0.]).unwrap();
+        assert_eq!(cost, 0.);
+
+        let mpc_problem = get_simple_problem(array![0., 0.]);
+        let cost = mpc_problem.cost(&array![0.]).unwrap();
+        assert_eq!(cost, 1.);
+    }
+
     #[test]
-    fn test_cost() {}
-    #[test]
-    fn test_optimization() {}
+    fn test_optimization() {
+        let goal = array![0., 0.];
+        let mpc_problem = get_simple_problem(goal.clone());
+
+        let n_points = 10;
+        // this problem can be solved by hand
+        let optimal_inputs = Array1::from_iter((0..n_points).map(|subindex| {
+            if subindex < (n_points / 2) {
+                -0.04
+            } else {
+                0.04
+            }
+        }));
+
+        // this is chosen so that the optimal value isn't quite in the simplex (though it will contain 0.05 and 0.00)
+        let max_input = 0.5;
+
+        let simplex = Vec::from_iter((0..(n_points + 1)).map(|index| {
+            // make the param vec a bang-bang input scaled by the max value
+            let max_value = max_input * (index as f64) / (n_points as f64);
+            Array1::from_iter((0..n_points).map(|subindex| {
+                if subindex < (n_points / 2) {
+                    -max_value
+                } else {
+                    max_value
+                }
+            }))
+        }));
+        let solver = NelderMead::new(simplex);
+        let res = Executor::new(mpc_problem, solver)
+            .configure(|state| state.max_iters(1000))
+            .run()
+            .unwrap();
+        let optimized_inputs = res.state.best_param.unwrap();
+        let mpc_problem = get_simple_problem(goal.clone());
+        let trajectory = mpc_problem.calculate_trajectory(&optimized_inputs);
+        let last_state = trajectory.last().unwrap();
+
+        assert!((goal - last_state).norm() < 1e-5);
+        assert!((optimized_inputs - optimal_inputs).norm() < 1e-5);
+    }
 }

@@ -442,13 +442,13 @@ mod test {
         (state - setpoint).norm()
     }
 
-    // the sum of input^2 over all the inputs is used to discriminate solutions that made it to the goal
+    // just punish input magnitude to discriminate between solutions that all reach the goal
     fn simple_dynamics_cost_function(
-        _state: &Array1<f64>,
-        input: ArrayView1<f64>,
+        _state: &Array1<Array1<f64>>,
+        inputs: &Array1<f64>,
         _setpoint: &Array1<f64>,
     ) -> f64 {
-        input[0].powi(2)
+        inputs.map(|input| input.abs()).sum()
     }
 
     fn get_simple_optimizer(goal: Array1<f64>) -> (MPCProblem, DynamicsOptimizer) {
