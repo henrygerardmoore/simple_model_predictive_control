@@ -476,7 +476,7 @@ mod bench {
         #[cfg(debug_assertions)]
         let num_iterations = 1000;
         #[cfg(not(debug_assertions))]
-        let num_iterations = 1_000_000;
+        let num_iterations = 100_000_000;
 
         let test_state = array![-PI / 4., PI / 6., 0.5, -0.3];
         let test_input = array![25.0];
@@ -492,7 +492,7 @@ mod bench {
         #[cfg(debug_assertions)]
         let num_iterations = 1000;
         #[cfg(not(debug_assertions))]
-        let num_iterations = 1_000_000;
+        let num_iterations = 100_000_000;
 
         let test_state = array![-PI / 4., PI / 6., 0.5, -0.3];
         let setpoint = Array1::from_iter(GOAL.into_iter());
@@ -508,7 +508,7 @@ mod bench {
         #[cfg(debug_assertions)]
         let num_iterations = 1000;
         #[cfg(not(debug_assertions))]
-        let num_iterations = 1_000_000;
+        let num_iterations = 100_000_000;
 
         let test_state = array![-PI / 4., PI / 6., 0.5, -0.3];
         let test_input = array![25.0];
