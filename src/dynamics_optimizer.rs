@@ -78,6 +78,24 @@ impl PartialOrd for Solution {
     }
 }
 
+pub struct DynamicsOptimizerSettings {
+    branching_factor: usize,
+    nelder_mead_iters: usize,
+    particle_count: usize,
+    target_size_override: Option<usize>,
+}
+
+impl Default for DynamicsOptimizerSettings {
+    fn default() -> Self {
+        Self {
+            branching_factor: 4,
+            nelder_mead_iters: 1000,
+            particle_count: 1000,
+            target_size_override: None,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct DynamicsOptimizer {
     // the dynamics at a state and the inputs to get there
@@ -97,6 +115,11 @@ pub struct DynamicsOptimizer {
 
     // TODO: try including all nodes in this, changing cost of node after it has had many children added to it
     leaves: BTreeSet<NodeIDAndCost>,
+
+    // solver settings
+    branching_factor: usize,
+    nelder_mead_iters: usize,
+    particle_count: usize,
 }
 
 #[derive(Clone)]
@@ -111,13 +134,16 @@ impl DynamicsOptimizer {
         input_max: Array1<f64>,
         mpc_problem: &MPCProblem,
         solution_cost_tolerance: f64,
+        settings: DynamicsOptimizerSettings,
     ) -> Self {
         let max_depth = (mpc_problem.lookahead_duration.as_secs_f64()
             / mpc_problem.sample_period.as_secs_f64())
         .ceil() as usize;
         let input_size = mpc_problem.input_size;
 
-        let target_size = max_depth * input_size * 2000;
+        let target_size = settings
+            .target_size_override
+            .unwrap_or(max_depth * input_size * 2000);
 
         let root_dynamics = DynamicsProblem {
             dynamics_function: mpc_problem.dynamics_function.clone(),
@@ -149,6 +175,9 @@ impl DynamicsOptimizer {
             solution_nodes: vec![],
             state_cost_epsilon: solution_cost_tolerance,
             leaves: BTreeSet::from([NodeIDAndCost(root_id, root_cost)]),
+            branching_factor: settings.branching_factor,
+            nelder_mead_iters: settings.nelder_mead_iters,
+            particle_count: settings.particle_count,
         }
     }
 
@@ -279,7 +308,9 @@ impl DynamicsOptimizer {
                         self.input_min_max.clone(),
                         self.dynamics_tree.get(*node_id).unwrap().value().0.clone(),
                         self.state_cost_epsilon,
-                        4,
+                        self.branching_factor,
+                        self.nelder_mead_iters,
+                        self.particle_count,
                     ),
                 )
             })
@@ -347,12 +378,14 @@ impl DynamicsOptimizer {
         parent_dynamics: DynamicsProblem,
         epsilon: f64,
         branch_factor: usize,
+        nelder_mead_iters: usize,
+        particle_count: usize,
     ) -> impl Iterator<Item = (f64, DynamicsProblem, Array1<f64>)> {
         // importance sample to get `branch_factor - 1` inputs
         let population = Self::particle_sample(
             input_min_max.0.clone(),
             input_min_max.1.clone(),
-            1000,
+            particle_count,
             &parent_dynamics,
         );
         let dist = WeightedIndex::new(population.iter().map(|particle| {
@@ -378,7 +411,11 @@ impl DynamicsOptimizer {
         let nm_solver = NelderMead::new(importance_sample_simplex);
 
         let res = Executor::new(parent_dynamics.clone(), nm_solver)
-            .configure(|state| state.max_iters(1000).target_cost(epsilon))
+            .configure(|state| {
+                state
+                    .max_iters(nelder_mead_iters as u64)
+                    .target_cost(epsilon)
+            })
             .run()
             .unwrap();
 
@@ -559,7 +596,8 @@ mod test {
     use ndarray_linalg::Norm;
 
     use crate::{
-        dynamics_optimizer::DynamicsOptimizer, dynamics_problem::DynamicsFunction,
+        dynamics_optimizer::{DynamicsOptimizer, DynamicsOptimizerSettings},
+        dynamics_problem::DynamicsFunction,
         prelude::MPCProblem,
     };
 
@@ -597,8 +635,13 @@ mod test {
             state_cost_function: Arc::new(&simple_state_cost_function),
             dynamics_cost_function: Box::new(&simple_dynamics_cost_function),
         };
-        let dynamics_optimizer =
-            DynamicsOptimizer::new(array![-10.], array![10.], &mpc_problem, 1e-3);
+        let dynamics_optimizer = DynamicsOptimizer::new(
+            array![-10.],
+            array![10.],
+            &mpc_problem,
+            1e-3,
+            DynamicsOptimizerSettings::default(),
+        );
         (mpc_problem, dynamics_optimizer)
     }
 
@@ -731,7 +774,8 @@ mod bench {
     use ndarray::{Array1, ArrayView1, array};
 
     use crate::{
-        dynamics_optimizer::DynamicsOptimizer, dynamics_problem::DynamicsFunction,
+        dynamics_optimizer::{DynamicsOptimizer, DynamicsOptimizerSettings},
+        dynamics_problem::DynamicsFunction,
         prelude::MPCProblem,
     };
     use ndarray_linalg::Norm;
@@ -770,8 +814,13 @@ mod bench {
             state_cost_function: Arc::new(&simple_state_cost_function),
             dynamics_cost_function: Box::new(&simple_dynamics_cost_function),
         };
-        let dynamics_optimizer =
-            DynamicsOptimizer::new(array![-10.], array![10.], &mpc_problem, 1e-3);
+        let dynamics_optimizer = DynamicsOptimizer::new(
+            array![-10.],
+            array![10.],
+            &mpc_problem,
+            1e-3,
+            DynamicsOptimizerSettings::default(),
+        );
         (mpc_problem, dynamics_optimizer)
     }
 

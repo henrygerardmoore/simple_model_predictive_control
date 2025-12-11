@@ -23,7 +23,9 @@ use ndarray::{Array1, Array2, ArrayView1, array, s};
 use ndarray_linalg::Solve;
 use plotters::prelude::*;
 use simple_model_predictive_control::{
-    dynamics_optimizer::DynamicsOptimizer, dynamics_problem::DynamicsFunction, prelude::*,
+    dynamics_optimizer::{DynamicsOptimizer, DynamicsOptimizerSettings},
+    dynamics_problem::DynamicsFunction,
+    prelude::*,
 };
 
 // link 1 angle CCW from right (rad), link 2 angle of deflection CCW *from link 1* (rad), link 1 angular velocity (rad/s), link 2 angular velocity (rad/s)
@@ -222,8 +224,13 @@ fn get_mpc_problem(
         Arc::new(state_cost),
         Box::new(simple_dynamics_cost_function),
     );
-    let dynamics_optimizer =
-        DynamicsOptimizer::new(array![-100.], array![100.], &mpc_problem, 1e-2);
+    let dynamics_optimizer = DynamicsOptimizer::new(
+        array![-100.],
+        array![100.],
+        &mpc_problem,
+        1e-2,
+        DynamicsOptimizerSettings::default(),
+    );
     (mpc_problem, dynamics_optimizer)
 }
 
@@ -300,23 +307,12 @@ fn trajectory_to_plot_format(trajectory: &mut Array1<Array1<f64>>) {
 fn plot_tree(tree_segments: Vec<([f64; 2], [f64; 2])>) -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new("tree.bmp", (1280, 720)).into_drawing_area();
     root.fill(&WHITE)?;
-    let (x_extent, y_extent) = tree_segments
-        .iter()
-        .fold((0.0_f64, 0.0_f64), |acc, (p1, p2)| {
-            (
-                acc.0.max(p1[0].abs()).max(p2[0].abs()),
-                acc.1.max(p1[1].abs()).max(p2[1].abs()),
-            )
-        });
-
-    let x_extent = x_extent.max(GOAL[0] + 0.01);
-    let y_extent = y_extent.max(GOAL[2] + 0.01);
     let mut chart = ChartBuilder::on(&root)
         .caption("MPC Tree", ("sans-serif", 50))
         .margin(5)
         .x_label_area_size(30)
         .y_label_area_size(30)
-        .build_cartesian_2d((-x_extent)..x_extent, (-y_extent)..y_extent)
+        .build_cartesian_2d(0.0..TAU, 0.0..TAU)
         .unwrap();
     chart.configure_mesh().draw()?;
 
@@ -350,7 +346,7 @@ pub fn main() {
     let now = Instant::now();
     let mut trajectory = Array1::<Array1<f64>>::default(0);
 
-    let mut initial_state = array![0., 0., 0., 0.];
+    let mut initial_state = array![-PI / 2., 0., 0., 0.];
 
     // how many lookahead periods we should do
     let num_chunks = 1;
@@ -360,7 +356,7 @@ pub fn main() {
         let (mut mpc_problem, mut solver) = get_mpc_problem(initial_state.clone(), goal.clone());
         // Run solver
         let res = Executor::new(mpc_problem, solver)
-            .configure(|state| state.max_iters(1000))
+            .configure(|state| state.max_iters(1))
             .add_observer(SlogLogger::term(), ObserverMode::Always)
             .run()
             .unwrap();

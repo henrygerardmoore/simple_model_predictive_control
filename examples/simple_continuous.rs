@@ -11,7 +11,9 @@ use ndarray::{Array1, ArrayView1, array};
 use ndarray_linalg::Norm;
 use plotters::prelude::*;
 use simple_model_predictive_control::{
-    dynamics_optimizer::DynamicsOptimizer, dynamics_problem::DynamicsFunction, prelude::*,
+    dynamics_optimizer::{DynamicsOptimizer, DynamicsOptimizerSettings},
+    dynamics_problem::DynamicsFunction,
+    prelude::*,
 };
 
 // x, x velocity, y, y velocity
@@ -68,8 +70,13 @@ fn get_mpc_problem(
         Arc::new(state_cost),
         Box::new(simple_dynamics_cost_function),
     );
-    let dynamics_optimizer =
-        DynamicsOptimizer::new(array![-10., -10.], array![10., 10.], &mpc_problem, 1e-3);
+    let dynamics_optimizer = DynamicsOptimizer::new(
+        array![-10., -10.],
+        array![10., 10.],
+        &mpc_problem,
+        1e-3,
+        DynamicsOptimizerSettings::default(),
+    );
     (mpc_problem, dynamics_optimizer)
 }
 

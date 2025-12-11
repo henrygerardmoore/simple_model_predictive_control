@@ -17,7 +17,9 @@ use ndarray::{Array1, ArrayView1, array};
 use ndarray_linalg::Norm;
 use plotters::{prelude::*, style::full_palette::GREY};
 use simple_model_predictive_control::{
-    dynamics_optimizer::DynamicsOptimizer, dynamics_problem::DynamicsFunction, prelude::*,
+    dynamics_optimizer::{DynamicsOptimizer, DynamicsOptimizerSettings},
+    dynamics_problem::DynamicsFunction,
+    prelude::*,
 };
 
 // cart position (m), cart velocity (m/s), angle (rad), angular velocity (rad)
@@ -152,8 +154,13 @@ fn get_mpc_problem(
         Arc::new(state_cost),
         Box::new(simple_dynamics_cost_function),
     );
-    let dynamics_optimizer =
-        DynamicsOptimizer::new(array![-100.], array![100.], &mpc_problem, 1e-2);
+    let dynamics_optimizer = DynamicsOptimizer::new(
+        array![-100.],
+        array![100.],
+        &mpc_problem,
+        1e-2,
+        DynamicsOptimizerSettings::default(),
+    );
     (mpc_problem, dynamics_optimizer)
 }
 
@@ -238,23 +245,12 @@ fn trajectory_to_plot_format(trajectory: &mut Array1<Array1<f64>>) {
 fn plot_tree(tree_segments: Vec<([f64; 2], [f64; 2])>) -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new("tree.bmp", (1280, 720)).into_drawing_area();
     root.fill(&WHITE)?;
-    let (x_extent, y_extent) = tree_segments
-        .iter()
-        .fold((0.0_f64, 0.0_f64), |acc, (p1, p2)| {
-            (
-                acc.0.max(p1[0].abs()).max(p2[0].abs()),
-                acc.1.max(p1[1].abs()).max(p2[1].abs()),
-            )
-        });
-
-    let x_extent = x_extent.max(GOAL[0] + 0.01);
-    let y_extent = y_extent.max(GOAL[2] + 0.01);
     let mut chart = ChartBuilder::on(&root)
         .caption("MPC Tree", ("sans-serif", 50))
         .margin(5)
         .x_label_area_size(30)
         .y_label_area_size(30)
-        .build_cartesian_2d((-x_extent)..x_extent, (-y_extent)..y_extent)
+        .build_cartesian_2d(CART_RAIL_BOUNDS.0..CART_RAIL_BOUNDS.1, 0.0..3.1415926535)
         .unwrap();
     chart.configure_mesh().draw()?;
 
