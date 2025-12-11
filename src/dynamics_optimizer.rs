@@ -80,7 +80,7 @@ pub struct DynamicsOptimizer {
     solution_nodes: Vec<NodeId>,
     input_min_max: (Array1<f64>, Array1<f64>),
 
-    target_num_leaves: usize,
+    target_size: usize,
 
     // node IDs we can reuse instead of inserting
     orphans: Vec<NodeId>,
@@ -103,7 +103,7 @@ impl DynamicsOptimizer {
         .ceil() as usize;
         let input_size = mpc_problem.input_size;
 
-        let target_size = max_depth * input_size * 1000;
+        let target_size = max_depth * input_size * 5;
 
         let root_dynamics = DynamicsProblem {
             dynamics_function: mpc_problem.dynamics_function.clone(),
@@ -130,7 +130,7 @@ impl DynamicsOptimizer {
             max_depth,
             solutions: BTreeSet::new(),
             input_min_max: (input_min, input_max),
-            target_num_leaves: target_size,
+            target_size,
             orphans: vec![],
             solution_nodes: vec![],
             state_cost_epsilon: solution_cost_tolerance,
@@ -445,7 +445,8 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
     ) -> Result<(IterState<Array1<f64>, (), (), (), (), f64>, Option<KV>), Error> {
         let mpc_problem = problem.problem.as_ref().unwrap();
 
-        let action = if self.leaves.len() < self.target_num_leaves {
+        let action = if (self.dynamics_tree.nodes().count() - self.orphans.len()) < self.target_size
+        {
             if self.grow_nodes(1) {
                 TreeOptimizationAction::Grow
             } else {
