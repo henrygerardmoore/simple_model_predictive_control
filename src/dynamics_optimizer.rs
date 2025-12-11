@@ -14,7 +14,7 @@ use argmin::{
     solver::neldermead::NelderMead,
 };
 use ego_tree::{NodeId, NodeRef, Tree};
-use ndarray::{Array, Axis, parallel::prelude::IntoParallelIterator};
+use ndarray::Array;
 use ndarray::{
     Array1,
     parallel::prelude::{IntoParallelRefIterator, ParallelIterator},
@@ -371,21 +371,30 @@ impl DynamicsOptimizer {
     ) -> Vec<Particle> {
         assert_eq!(minima.len(), maxima.len());
         let dimension = minima.len();
+
+        // Pre-allocate output
+        let mut particles = Vec::with_capacity(num_particles);
+
+        // Pre-compute range once
+        let ranges = &maxima - &minima;
+
+        // Generate all random numbers at once (unchanged)
         let uniform_dist = Uniform::new(0., 1.);
         let unit_randoms = Array::random((num_particles, dimension), uniform_dist);
 
-        let ranges = &maxima - &minima;
-        let samples = &unit_randoms * &ranges + &minima;
+        // Process each particle
+        for i in 0..num_particles {
+            // Scale the random sample to [min, max] in-place
+            let mut input = minima.clone();
+            for j in 0..dimension {
+                input[j] += unit_randoms[[i, j]] * ranges[j];
+            }
 
-        samples
-            .axis_iter(Axis(0))
-            .into_par_iter()
-            .map(|row| {
-                let input = row.to_owned();
-                let cost = dynamics.cost(&input).unwrap();
-                Particle { input, cost }
-            })
-            .collect()
+            let cost = dynamics.cost(&input).unwrap();
+            particles.push(Particle { input, cost });
+        }
+
+        particles
     }
 
     /// the most important function in the DynamicsOptimizer
@@ -896,7 +905,7 @@ mod bench {
         #[cfg(debug_assertions)]
         let num_iterations = 10;
         #[cfg(not(debug_assertions))]
-        let num_iterations = 10000;
+        let num_iterations = 100000;
 
         let (_, dynamics_optimizer) = get_simple_optimizer(goal.clone());
         let dynamics_optimizer = RefCell::new(dynamics_optimizer);
