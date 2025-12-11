@@ -443,3 +443,78 @@ pub fn main() {
         OUT_FILE_NAME
     );
 }
+
+#[cfg(test)]
+mod bench {
+    use super::*;
+    use std::hint::black_box;
+    use std::time::{Duration, Instant};
+
+    fn bench_function<F>(name: &str, iterations: usize, mut f: F) -> Duration
+    where
+        F: FnMut(),
+    {
+        let mut total_duration = Duration::ZERO;
+
+        for _ in 0..iterations {
+            let start = Instant::now();
+            black_box(f());
+            total_duration += start.elapsed();
+        }
+
+        let avg = total_duration / iterations as u32;
+        println!(
+            "{}: avg {:?}/call over {} iterations",
+            name, avg, iterations
+        );
+        avg
+    }
+
+    // run with `cargo test --release --package simple_model_predictive_control --example acrobot -- bench::benchmark_state_derivative --exact --nocapture`
+    #[test]
+    pub fn benchmark_state_derivative() {
+        #[cfg(debug_assertions)]
+        let num_iterations = 1000;
+        #[cfg(not(debug_assertions))]
+        let num_iterations = 1_000_000;
+
+        let test_state = array![-PI / 4., PI / 6., 0.5, -0.3];
+        let test_input = array![25.0];
+
+        bench_function("state_derivative", num_iterations, || {
+            state_derivative(black_box(&test_state), black_box(test_input.view()));
+        });
+    }
+
+    // run with `cargo test --release --package simple_model_predictive_control --example acrobot -- bench::benchmark_state_cost --exact --nocapture`
+    #[test]
+    pub fn benchmark_state_cost() {
+        #[cfg(debug_assertions)]
+        let num_iterations = 1000;
+        #[cfg(not(debug_assertions))]
+        let num_iterations = 1_000_000;
+
+        let test_state = array![-PI / 4., PI / 6., 0.5, -0.3];
+        let setpoint = Array1::from_iter(GOAL.into_iter());
+
+        bench_function("state_cost", num_iterations, || {
+            state_cost(black_box(&test_state), black_box(&setpoint));
+        });
+    }
+
+    // run with `cargo test --release --package simple_model_predictive_control --example acrobot -- bench::benchmark_unoptimized_state_derivative --exact --nocapture`
+    #[test]
+    pub fn benchmark_unoptimized_state_derivative() {
+        #[cfg(debug_assertions)]
+        let num_iterations = 1000;
+        #[cfg(not(debug_assertions))]
+        let num_iterations = 1_000_000;
+
+        let test_state = array![-PI / 4., PI / 6., 0.5, -0.3];
+        let test_input = array![25.0];
+
+        bench_function("unoptimized_state_derivative", num_iterations, || {
+            unoptimized_state_derivative(black_box(&test_state), black_box(test_input.view()));
+        });
+    }
+}
