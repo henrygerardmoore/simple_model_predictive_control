@@ -108,12 +108,8 @@ impl Hessian for DynamicsProblem {
     type Hessian = Array2<f64>;
 
     fn hessian(&self, param: &Self::Param) -> Result<Self::Hessian, argmin_math::Error> {
-        let dynamics_closure = |inputs: &Self::Param| {
-            Ok(self
-                .dynamics_function
-                .get_next_state(&self.state, inputs.view(), self.dt))
-        };
-        let h_forward = ndarr::forward_hessian(&dynamics_closure);
+        let gradient_closure = |inputs: &Self::Param| self.gradient(inputs);
+        let h_forward = ndarr::forward_hessian(&gradient_closure);
         h_forward(param)
     }
 
