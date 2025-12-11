@@ -1,5 +1,6 @@
 use std::{
     f64::consts::{PI, TAU},
+    iter::once,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -25,6 +26,8 @@ const INPUT_SIZE: usize = 1;
 
 // timestep (s)
 const DT: f64 = 0.1;
+
+const PLOT_SUBDIVISION: usize = 10;
 
 // lookahead time (s)
 const LOOKAHEAD: f64 = 2.5;
@@ -146,7 +149,7 @@ fn get_mpc_problem(
         &mpc_problem,
         1e-2,
         DynamicsOptimizerSettings {
-            time_limit: Some(Duration::from_secs_f32(2.)),
+            time_limit: Some(Duration::from_secs_f32(5.)),
             ..Default::default()
         },
     );
@@ -156,10 +159,12 @@ fn get_mpc_problem(
 fn plot(trajectory: Array1<Array1<f64>>) -> Result<(), Box<dyn std::error::Error>> {
     let now = Instant::now();
     // don't render any faster than 100 fps; if we're simulating faster than that this will result in a little slow-mo, which is ok
-    let frame_time = ((DT * 1000.).round() as u32).max(10);
+    let frame_time = ((DT / (PLOT_SUBDIVISION as f64) * 1000.).round() as u32).max(10);
     let root = BitMapBackend::gif(OUT_FILE_NAME, (1280, 720), frame_time)?.into_drawing_area();
 
-    for i in 0..trajectory.len() {
+    for i in
+        (0..trajectory.len()).step_by(((0.1 / (DT / (PLOT_SUBDIVISION as f64))) as usize).max(1))
+    {
         root.fill(&WHITE)?;
 
         let point = trajectory[i].clone();
@@ -168,7 +173,10 @@ fn plot(trajectory: Array1<Array1<f64>>) -> Result<(), Box<dyn std::error::Error
 
         let mut chart = ChartBuilder::on(&root)
             .caption(
-                format!("Cartpole MPC Trajectory (t = {:.1})", (i as f64) * DT),
+                format!(
+                    "Cartpole MPC Trajectory (t = {:.1})",
+                    (i as f64) * DT / (PLOT_SUBDIVISION as f64)
+                ),
                 ("sans-serif", 50),
             )
             .build_cartesian_2d(-1.0 * aspect_ratio..1.0 * aspect_ratio, -1.0..1.0)?;
@@ -260,6 +268,49 @@ fn plot_tree(tree_segments: Vec<([f64; 2], [f64; 2])>) -> Result<(), Box<dyn std
     Ok(())
 }
 
+fn signed_angle_difference(theta1: f64, theta2: f64) -> f64 {
+    let mut diff = (theta2 - theta1) % (2.0 * std::f64::consts::PI);
+
+    if diff > std::f64::consts::PI {
+        diff -= 2.0 * std::f64::consts::PI;
+    } else if diff < -std::f64::consts::PI {
+        diff += 2.0 * std::f64::consts::PI;
+    }
+
+    diff
+}
+
+fn subdivide_trajectory(
+    trajectory: ArrayView1<Array1<f64>>,
+    subdivision: usize,
+) -> Array1<Array1<f64>> {
+    assert!(subdivision > 0, "Cannot subdivide 0 times");
+    // interpolate between each trajectory point
+    // we will add `subdivision` - 1 equispaced points between each pair
+    let interpoland_step = 1. / (subdivision as f64);
+    Array1::from_iter(
+        (0..(trajectory.len() - 1))
+            .flat_map(|i| {
+                let p1 = &trajectory[i];
+                let p2 = &trajectory[i + 1];
+                let delta = array![
+                    p2[0] - p1[0],
+                    p2[1] - p1[1],
+                    signed_angle_difference(p1[2], p2[2]),
+                    p2[3] - p1[3]
+                ];
+                (0..subdivision).map(move |interp_index| {
+                    let mut out_state =
+                        p1 + (interp_index as f64) * interpoland_step * delta.clone();
+                    out_state[2] = out_state[2].rem_euclid(TAU);
+                    out_state
+                })
+            })
+            // this would otherwise miss the last point in the traj
+            .chain(once(trajectory.last().unwrap().clone())),
+    )
+}
+
 const OUT_FILE_NAME: &str = "cartpole.gif";
 
 pub fn main() {
@@ -267,38 +318,32 @@ pub fn main() {
     let now = Instant::now();
     let mut trajectory = Array1::<Array1<f64>>::default(0);
 
-    let mut initial_state = array![0., 0., 0., 0.];
+    let initial_state = array![0., 0., 0., 0.];
 
-    // how many lookahead periods we should do
-    let num_chunks = 1;
     let goal = Array1::from_iter(GOAL.into_iter());
-
-    for _ in 0..num_chunks {
-        let (mut mpc_problem, solver) = get_mpc_problem(initial_state.clone(), goal.clone());
-        // Run solver
-        let res = Executor::new(mpc_problem, solver)
-            .configure(|state| state.max_iters(1000))
-            .add_observer(SlogLogger::term(), ObserverMode::Every(50))
-            .run()
-            .unwrap();
-
-        plot_tree(res.solver.get_line_segments(0, 2)).unwrap();
-
-        mpc_problem = res.problem.problem.unwrap();
-        let this_trajectory =
-            mpc_problem.calculate_trajectory(res.state.best_param.unwrap().view());
-        trajectory
-            .append(ndarray::Axis(0), this_trajectory.view())
-            .unwrap();
-        initial_state = this_trajectory.last().unwrap().clone();
-    }
-
+    let (mut mpc_problem, solver) = get_mpc_problem(initial_state, goal.clone());
+    // Run solver
+    let res = Executor::new(mpc_problem, solver)
+        .configure(|state| state.max_iters(1000))
+        .add_observer(SlogLogger::term(), ObserverMode::Every(50))
+        .run()
+        .unwrap();
     let elapsed = now.elapsed();
     println!(
-        "MPC simulation of {:.1} seconds complete in {:.1} seconds, now plotting...",
-        (num_chunks as f64) * LOOKAHEAD,
+        "MPC simulation of {:.2} seconds complete in {:.2} seconds, now plotting...",
+        LOOKAHEAD,
         elapsed.as_secs_f64()
     );
+
+    plot_tree(res.solver.get_line_segments(0, 2)).unwrap();
+
+    mpc_problem = res.problem.problem.unwrap();
+    let this_trajectory = mpc_problem.calculate_trajectory(res.state.best_param.unwrap().view());
+    trajectory
+        .append(ndarray::Axis(0), this_trajectory.view())
+        .unwrap();
+
+    let mut trajectory = subdivide_trajectory(trajectory.view(), PLOT_SUBDIVISION);
 
     #[cfg(feature = "profiling")]
     {
