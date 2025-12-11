@@ -410,7 +410,7 @@ pub fn main() {
     let mut line_segments = vec![];
 
     let goal = Array1::from_iter(GOAL.into_iter());
-    let num_chunks = (1. / CONTROLLER_TIME_LIMIT).ceil() as usize;
+    let num_chunks = (5. / CONTROLLER_TIME_LIMIT).ceil() as usize;
     for _ in 0..num_chunks {
         let (mut mpc_problem, solver) = get_mpc_problem(initial_state, goal.clone());
         // Run solver
