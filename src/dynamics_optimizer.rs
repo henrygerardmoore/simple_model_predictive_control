@@ -447,17 +447,24 @@ impl DynamicsOptimizer {
 
         // turn our selected inputs into the next states they create
         inputs_iter.map(move |input| {
-            let mut new_dynamics = parent_dynamics.clone();
-            new_dynamics.state = new_dynamics.dynamics_function.get_next_state(
-                &new_dynamics.state,
+            let new_state = parent_dynamics.dynamics_function.get_next_state(
+                &parent_dynamics.state,
                 input.view(),
-                new_dynamics.dt,
+                parent_dynamics.dt,
             );
-            (
-                (new_dynamics.state_cost_function)(&new_dynamics.state, &new_dynamics.set_point),
-                new_dynamics,
-                input.clone(),
-            )
+
+            let cost =
+                (parent_dynamics.state_cost_function)(&new_state, &parent_dynamics.set_point);
+
+            let new_dynamics = DynamicsProblem {
+                dynamics_function: parent_dynamics.dynamics_function.clone(),
+                state_cost_function: parent_dynamics.state_cost_function.clone(),
+                state: new_state,
+                set_point: parent_dynamics.set_point.clone(),
+                dt: parent_dynamics.dt,
+            };
+
+            (cost, new_dynamics, input)
         })
     }
 
