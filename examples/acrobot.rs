@@ -309,38 +309,24 @@ const OUT_FILE_NAME: &str = "acrobot.gif";
 pub fn main() {
     println!("Running acrobot MPC simulation...");
     let now = Instant::now();
-    let mut trajectory = Array1::<Array1<f64>>::default(0);
 
-    let mut initial_state = array![-PI / 2., 0., 0., 0.];
+    let initial_state = array![-PI / 2., 0., 0., 0.];
 
     // how many lookahead periods we should do
-    let num_chunks = 1;
     let goal = Array1::from_iter(GOAL.into_iter());
 
-    for _ in 0..num_chunks {
-        let (mut mpc_problem, solver) = get_mpc_problem(initial_state.clone(), goal.clone());
-        // Run solver
-        let res = Executor::new(mpc_problem, solver)
-            .configure(|state| state.max_iters(2000))
-            .add_observer(SlogLogger::term(), ObserverMode::Every(50))
-            .run()
-            .unwrap();
-
-        plot_tree(res.solver.get_line_segments(0, 1)).unwrap();
-
-        mpc_problem = res.problem.problem.unwrap();
-        let this_trajectory =
-            mpc_problem.calculate_trajectory(res.state.best_param.unwrap().view());
-        trajectory
-            .append(ndarray::Axis(0), this_trajectory.view())
-            .unwrap();
-        initial_state = this_trajectory.last().unwrap().clone();
-    }
+    let (mut mpc_problem, solver) = get_mpc_problem(initial_state, goal.clone());
+    // Run solver
+    let res = Executor::new(mpc_problem, solver)
+        .configure(|state| state.max_iters(1001))
+        .add_observer(SlogLogger::term(), ObserverMode::Every(100))
+        .run()
+        .unwrap();
 
     let elapsed = now.elapsed();
     println!(
         "MPC simulation of {:.1} seconds complete in {:.1} seconds, now plotting...",
-        (num_chunks as f64) * LOOKAHEAD,
+        LOOKAHEAD,
         elapsed.as_secs_f64()
     );
 
@@ -349,6 +335,11 @@ pub fn main() {
         println!("Profiling mode: skipping plotting");
         return;
     }
+
+    plot_tree(res.solver.get_line_segments(0, 1)).unwrap();
+
+    mpc_problem = res.problem.problem.unwrap();
+    let mut trajectory = mpc_problem.calculate_trajectory(res.state.best_param.unwrap().view());
 
     trajectory_to_plot_format(&mut trajectory);
     plot(trajectory).unwrap();
