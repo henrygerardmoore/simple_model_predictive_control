@@ -2,14 +2,21 @@
 
 use std::{
     f64::consts::{PI, TAU},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
-use argmin::{core::Executor, solver::neldermead::NelderMead};
-use ndarray::{Array1, ArrayView1};
+use argmin::{
+    core::{Executor, observers::ObserverMode},
+    solver::neldermead::NelderMead,
+};
+use argmin_observer_slog::SlogLogger;
+use ndarray::{Array1, ArrayView1, array};
 
 use plotters::{prelude::*, style::full_palette::GREY};
-use simple_model_predictive_control::prelude::*;
+use simple_model_predictive_control::{
+    dynamics_optimizer::DynamicsOptimizer, dynamics_problem::DynamicsFunction, prelude::*,
+};
 
 // cart position (m), cart velocity (m/s), angle (rad), angular velocity (rad)
 // the angle state is positive CCW and
@@ -36,11 +43,7 @@ const CART_RAIL_BOUNDS: (f64, f64) = (-1., 1.); // (N, N)
 const INPUT_MAX: f64 = 200.; // N
 
 // dynamics for this example are from https://underactuated.mit.edu/acrobot.html#cart_pole
-fn dynamics_function(
-    state: &[f64; STATE_SIZE],
-    input: &ArrayView1<f64>,
-    dt: Duration,
-) -> [f64; STATE_SIZE] {
+fn dynamics_function(state: &Array1<f64>, input: ArrayView1<f64>, dt: Duration) -> Array1<f64> {
     let dt = dt.as_secs_f64();
     if dt <= 0. {
         return state.clone();
@@ -78,7 +81,7 @@ fn dynamics_function(
                     - (CART_MASS + POLE_MASS) * GRAVITY * theta.sin())
                 - omega * angular_damping_coefficient;
 
-            state = [
+            state = array![
                 next_x_position,
                 next_vx,
                 (theta + dt * omega).rem_euclid(TAU), // wrap angle to 0-2*pi value
@@ -101,7 +104,7 @@ fn dynamics_function(
                 - omega * angular_damping_coefficient;
 
             // euler integration
-            state = [
+            state = array![
                 next_x_position,
                 vx + dt * x_accel,
                 (theta + dt * omega).rem_euclid(TAU), // wrap angle to 0-2*pi value
@@ -120,11 +123,7 @@ fn terminal_cost(state: &[f64; STATE_SIZE], setpoint: &[f64; STATE_SIZE]) -> f64
     })
 }
 
-fn state_cost(
-    state: &[f64; STATE_SIZE],
-    setpoint: &[f64; STATE_SIZE],
-    _command: &ArrayView1<f64>,
-) -> f64 {
+fn state_cost(state: &Array1<f64>, setpoint: &Array1<f64>) -> f64 {
     let angle_tolerance = 0.1;
     // penalize off-target x position
     2. * (state[0] - setpoint[0]).powi(2)
@@ -133,23 +132,34 @@ fn state_cost(
     // don't penalize commands in this case to prefer a better solution
 }
 
-// fn get_mpc_problem(
-//     initial_conditions: [f64; STATE_SIZE],
-//     setpoint: [f64; STATE_SIZE],
-// ) -> MPCProblem<STATE_SIZE, INPUT_SIZE> {
-//     MPCProblemBuilder::<STATE_SIZE, INPUT_SIZE>::new()
-//         .dynamics_function(DynamicsFunction::Discrete(Box::new(&dynamics_function)))
-//         .state_cost(&state_cost)
-//         .terminal_cost(&terminal_cost)
-//         .lookahead_duration(Duration::from_secs_f64(LOOKAHEAD))
-//         .sample_period(Duration::from_secs_f64(DT))
-//         .setpoint(setpoint)
-//         .initial_conditions(initial_conditions)
-//         .build()
-//         .unwrap()
-// }
+fn simple_dynamics_cost_function(
+    _state: &Array1<Array1<f64>>,
+    inputs: &Array1<f64>,
+    _setpoint: &Array1<f64>,
+) -> f64 {
+    inputs.map(|input| input.abs()).sum()
+}
 
-fn plot(trajectory: Array1<[f64; STATE_SIZE]>) -> Result<(), Box<dyn std::error::Error>> {
+fn get_mpc_problem(
+    initial_conditions: Array1<f64>,
+    setpoint: Array1<f64>,
+) -> (MPCProblem, DynamicsOptimizer) {
+    let mpc_problem = MPCProblem::new(
+        setpoint,
+        initial_conditions,
+        Duration::from_secs_f64(DT),
+        Duration::from_secs_f64(LOOKAHEAD),
+        DynamicsFunction::Discrete(Arc::new(dynamics_function)),
+        2,
+        Arc::new(state_cost),
+        Box::new(simple_dynamics_cost_function),
+    );
+    let dynamics_optimizer =
+        DynamicsOptimizer::new(array![-10., -10.], array![10., 10.], &mpc_problem, 1e-3);
+    (mpc_problem, dynamics_optimizer)
+}
+
+fn plot(trajectory: Array1<Array1<f64>>) -> Result<(), Box<dyn std::error::Error>> {
     let now = Instant::now();
     // don't render any faster than 100 fps; if we're simulating faster than that this will result in a little slow-mo, which is ok
     let frame_time = ((DT * 1000.).round() as u32).max(10);
@@ -158,7 +168,7 @@ fn plot(trajectory: Array1<[f64; STATE_SIZE]>) -> Result<(), Box<dyn std::error:
     for i in 0..trajectory.len() {
         root.fill(&WHITE)?;
 
-        let point = trajectory[i];
+        let point = trajectory[i].clone();
 
         let aspect_ratio = 1280. / 720.;
 
@@ -210,7 +220,7 @@ fn plot(trajectory: Array1<[f64; STATE_SIZE]>) -> Result<(), Box<dyn std::error:
 }
 
 // change the trajectory from (x_cart, vx_cart, theta, omega) to (x_cart, y_cart, x_pole_tip, y_pole_tip)
-fn trajectory_to_plot_format(trajectory: &mut Array1<[f64; 4]>) {
+fn trajectory_to_plot_format(trajectory: &mut Array1<Array1<f64>>) {
     trajectory.iter_mut().for_each(|state| {
         let x_cart = state[0];
         let theta = state[2];
@@ -227,58 +237,43 @@ fn trajectory_to_plot_format(trajectory: &mut Array1<[f64; 4]>) {
     });
 }
 
-#[cfg(debug_assertions)]
-const OUT_FILE_NAME: &str = "cartpole_debug.gif";
-#[cfg(not(debug_assertions))]
-const OUT_FILE_NAME: &str = "cartpole_release.gif";
-// see plotters animation example for reference:
-// https://github.com/plotters-rs/plotters/blob/master/plotters/examples/animation.rs
+const OUT_FILE_NAME: &str = "cartpole.gif";
 pub fn main() {
-    // println!("Running cartpole MPC simulation...");
-    // let now = Instant::now();
-    // let mut trajectory = Array1::<[f64; 4]>::default(0);
+    println!("Running cartpole MPC simulation...");
+    let now = Instant::now();
+    let mut trajectory = Array1::<Array1<f64>>::default(0);
 
-    // let mut initial_state = [0., 0., 0., 0.];
+    let mut initial_state = array![0., 0., 0., 0.];
 
-    // // how many lookahead periods we should do
-    // let num_chunks = 5;
+    // how many lookahead periods we should do
+    let num_chunks = 5;
+    let goal = Array1::from_iter(GOAL.into_iter());
 
-    // for _ in 0..num_chunks {
-    //     let mpc_problem = get_mpc_problem(initial_state, GOAL);
+    for _ in 0..num_chunks {
+        let (mut mpc_problem, mut solver) = get_mpc_problem(initial_state.clone(), goal.clone());
+        // Run solver
+        let res = Executor::new(mpc_problem, solver)
+            .configure(|state| state.max_iters(1000))
+            .add_observer(SlogLogger::term(), ObserverMode::Always)
+            .run()
+            .unwrap();
 
-    //     let solver = NelderMead::new(mpc_problem.parameter_vector(1.));
-    //     // Run solver
-    //     // plotting is actually the slowest part when in debug mode, but solving is also much slower of course
-    //     #[cfg(debug_assertions)]
-    //     let res = Executor::new(mpc_problem, solver)
-    //         .configure(|state| state.max_iters(1000))
-    //         .run()
-    //         .unwrap();
-    //     #[cfg(not(debug_assertions))]
-    //     let res = Executor::new(mpc_problem, solver)
-    //         .configure(|state| state.max_iters(10000))
-    //         .run()
-    //         .unwrap();
+        mpc_problem = res.problem.problem.unwrap();
+        let this_trajectory =
+            mpc_problem.calculate_trajectory(res.state.best_param.unwrap().view());
+        trajectory
+            .append(ndarray::Axis(0), this_trajectory.view())
+            .unwrap();
+        initial_state = this_trajectory.last().unwrap().clone();
+    }
 
-    //     let mpc_problem = get_mpc_problem(initial_state, GOAL);
+    trajectory_to_plot_format(&mut trajectory);
 
-    //     // update start position and append to overall trajectory
-    //     let this_trajectory =
-    //         mpc_problem.calculate_trajectory(&res.state.best_param.unwrap().view());
-    //     // let this_trajectory = mpc_problem.calculate_trajectory(&Array1::from_vec(vec![10.; n]).view());
-    //     trajectory
-    //         .append(ndarray::Axis(0), this_trajectory.view())
-    //         .unwrap();
-    //     initial_state = *this_trajectory.last().unwrap();
-    // }
-
-    // trajectory_to_plot_format(&mut trajectory);
-
-    // let elapsed = now.elapsed();
-    // println!(
-    //     "MPC simulation of {:.1} seconds complete in {:.1} seconds, now plotting...",
-    //     (num_chunks as f64) * LOOKAHEAD,
-    //     elapsed.as_secs_f64()
-    // );
-    // plot(trajectory).unwrap();
+    let elapsed = now.elapsed();
+    println!(
+        "MPC simulation of {:.1} seconds complete in {:.1} seconds, now plotting...",
+        (num_chunks as f64) * LOOKAHEAD,
+        elapsed.as_secs_f64()
+    );
+    plot(trajectory).unwrap();
 }
