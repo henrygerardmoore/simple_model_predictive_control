@@ -34,7 +34,12 @@ pub struct DynamicsOptimizer {
 }
 
 impl DynamicsOptimizer {
-    pub fn new(input_min: Array1<f64>, input_max: Array1<f64>, mpc_problem: &MPCProblem) -> Self {
+    pub fn new(
+        input_min: Array1<f64>,
+        input_max: Array1<f64>,
+        mpc_problem: &MPCProblem,
+        solution_cost_tolerance: f64,
+    ) -> Self {
         let max_depth = (mpc_problem.lookahead_duration.as_secs_f64()
             / mpc_problem.sample_period.as_secs_f64())
         .ceil() as usize;
@@ -67,7 +72,7 @@ impl DynamicsOptimizer {
             target_size,
             orphans: vec![],
             solution_nodes: vec![],
-            state_cost_epsilon: 1e-5,
+            state_cost_epsilon: solution_cost_tolerance,
         }
     }
 
@@ -82,11 +87,12 @@ impl DynamicsOptimizer {
         depth
     }
 
-    fn calculate_solutions(&mut self, mpc_problem: &MPCProblem) {
+    fn calculate_and_sort_solutions(&mut self, mpc_problem: &MPCProblem) {
         while let Some(solution_node) = self.solution_nodes.pop() {
             self.solutions
                 .push(self.get_inputs_and_trajectory_cost_to_node(mpc_problem, solution_node));
         }
+        self.solutions.sort_by(|s1, s2| s1.1.total_cmp(&s2.1));
     }
 
     // traverse up the tree to the root, collecting all the inputs into one and then calculating the trajectory cost from that
@@ -151,11 +157,6 @@ impl DynamicsOptimizer {
             .take(num_nodes)
             .collect();
 
-        let best_leaf = &self.dynamics_tree.get(best_leaf_ids[0]).unwrap().value().0;
-        let best_cost = (best_leaf.state_cost_function)(&best_leaf.state, &best_leaf.set_point);
-
-        println!("Best leaf cost: {}", best_cost);
-
         best_leaf_ids.into_iter().for_each(|id_to_grow| {
             self.grow_node(id_to_grow);
         });
@@ -169,8 +170,9 @@ impl DynamicsOptimizer {
             self.state_cost_epsilon,
         )
         .map(|(cost, dynamics_problem, inputs)| {
-            let id = self.add_node(dynamics_problem, inputs);
+            let id = self.add_node(dynamics_problem.clone(), inputs);
             if cost < self.state_cost_epsilon {
+                println!("Solution found at {}", dynamics_problem.state);
                 self.solution_nodes.push(id);
             }
             id
@@ -258,7 +260,7 @@ impl DynamicsOptimizer {
             let nelder_mead_solver = NelderMead::new(params);
 
             let res = Executor::new(parent_dynamics.clone(), nelder_mead_solver)
-                .configure(|state| state.max_iters(100))
+                .configure(|state| state.max_iters(10))
                 .run()
                 .unwrap();
             res.state.best_param.unwrap()
@@ -320,11 +322,6 @@ impl DynamicsOptimizer {
             .map(|node_ref| node_ref.id())
             .collect();
 
-        let worst_leaf = &self.dynamics_tree.get(ids_to_prune[0]).unwrap().value().0;
-        let worst_cost = (worst_leaf.state_cost_function)(&worst_leaf.state, &worst_leaf.set_point);
-
-        println!("Pruning worst leaf of cost: {}", worst_cost);
-
         ids_to_prune.into_iter().for_each(|id_to_prune| {
             self.prune_node(id_to_prune);
         });
@@ -381,7 +378,7 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
     fn next_iter(
         &mut self,
         problem: &mut Problem<MPCProblem>,
-        state: IterState<Array1<f64>, (), (), (), (), f64>,
+        mut state: IterState<Array1<f64>, (), (), (), (), f64>,
     ) -> Result<(IterState<Array1<f64>, (), (), (), (), f64>, Option<KV>), Error> {
         let mpc_problem = problem.problem.as_ref().unwrap();
 
@@ -393,7 +390,13 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
             TreeOptimizationAction::Prune
         };
 
-        self.calculate_solutions(mpc_problem);
+        self.calculate_and_sort_solutions(mpc_problem);
+
+        if !self.solutions.is_empty() {
+            // `calculate_solutions`
+            state.best_param = Some(self.solutions[0].0.clone());
+            state.best_cost = self.solutions[0].1;
+        }
 
         Ok((state, Some(kv!("action" => format!("{action}");))))
     }
@@ -415,15 +418,17 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
 mod test {
     use std::{sync::Arc, time::Duration};
 
+    use argmin::core::Executor;
     use ndarray::{Array1, ArrayView1, array};
+    use ndarray_linalg::Norm;
 
     use crate::{
         dynamics_optimizer::DynamicsOptimizer, dynamics_problem::DynamicsFunction,
         prelude::MPCProblem,
     };
 
-    const DT: f64 = 0.1;
-    const LOOKAHEAD: f64 = 500.0;
+    const DT: f64 = 1.;
+    const LOOKAHEAD: f64 = 10.;
     const INITIAL_POS: f64 = 1.0;
     const INITIAL_VEL: f64 = 0.0;
 
@@ -432,12 +437,8 @@ mod test {
         array![state[1], input[0]]
     }
 
-    // simple L2 distance to setpoint
     fn simple_state_cost_function(state: &Array1<f64>, setpoint: &Array1<f64>) -> f64 {
-        state
-            .iter()
-            .zip(setpoint.iter())
-            .fold(0., |acc, x| acc + (x.0 - x.1).powi(2))
+        (state - setpoint).norm()
     }
 
     // the sum of input^2 over all the inputs is used to discriminate solutions that made it to the goal
@@ -460,7 +461,8 @@ mod test {
             state_cost_function: Arc::new(&simple_state_cost_function),
             dynamics_cost_function: Box::new(&simple_dynamics_cost_function),
         };
-        let dynamics_optimizer = DynamicsOptimizer::new(array![-1.], array![1.], &mpc_problem);
+        let dynamics_optimizer =
+            DynamicsOptimizer::new(array![-10.], array![10.], &mpc_problem, 1e-3);
         (mpc_problem, dynamics_optimizer)
     }
 
@@ -473,7 +475,7 @@ mod test {
         ];
         let (mpc_problem, mut dynamics_optimizer) = get_simple_optimizer(goal);
         dynamics_optimizer.grow_nodes(1);
-        dynamics_optimizer.calculate_solutions(&mpc_problem);
+        dynamics_optimizer.calculate_and_sort_solutions(&mpc_problem);
 
         // ensure that we found at least one solution
         assert!(dynamics_optimizer.solutions.len() > 0);
@@ -516,14 +518,13 @@ mod test {
     }
 
     #[test]
-    fn test_find_goal_moderate() {
+    fn test_find_goal_moderate_difficulty() {
         let goal = array![0., 0.];
         let (mpc_problem, mut dynamics_optimizer) = get_simple_optimizer(goal.clone());
         let mut num_iter = 0;
         let max_iter = 10000;
         let target_count = 1000;
         while num_iter < max_iter && dynamics_optimizer.solution_nodes.len() == 0 {
-            println!("iteration {}", num_iter + 1);
             dynamics_optimizer.grow_nodes(3);
             let count = dynamics_optimizer
                 .dynamics_tree
@@ -535,17 +536,9 @@ mod test {
             if num_to_prune > 0 {
                 dynamics_optimizer.prune_nodes((num_to_prune + 5) as usize);
             }
-
-            println!("Number of leaves: {}", dynamics_optimizer.leaves().count());
-
-            println!(
-                "Total number: {}",
-                dynamics_optimizer.dynamics_tree.nodes().count() - dynamics_optimizer.orphans.len()
-            );
             num_iter += 1;
-            println!("");
         }
-        dynamics_optimizer.calculate_solutions(&mpc_problem);
+        dynamics_optimizer.calculate_and_sort_solutions(&mpc_problem);
 
         // ensure that we found at least one solution
         assert!(dynamics_optimizer.solutions.len() > 0);
@@ -557,6 +550,24 @@ mod test {
 
         println!("last_point: {}", last_point);
 
-        assert!(last_point.relative_eq(&goal, 0.1, 0.1));
+        assert!((last_point - goal).norm() < 1e-3);
+    }
+
+    #[test]
+    fn test_optimizer_argmin() {
+        let goal = array![0., 0.];
+        let (mpc_problem, dynamics_optimizer) = get_simple_optimizer(goal.clone());
+        let res = Executor::new(mpc_problem, dynamics_optimizer)
+            .configure(|state| state.max_iters(10000))
+            .run()
+            .unwrap();
+
+        let optimal_inputs = res.state.best_param.unwrap();
+        let (mpc_problem, _) = get_simple_optimizer(goal.clone());
+        let solution_trajectory = mpc_problem.calculate_trajectory(&optimal_inputs);
+
+        let last_point = solution_trajectory.last().unwrap();
+
+        assert!((last_point - goal).norm() < 1e-3);
     }
 }
