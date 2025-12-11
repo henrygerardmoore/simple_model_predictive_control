@@ -2,11 +2,13 @@
 
 use std::{
     f64::consts::{PI, TAU},
+    iter::once,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 use argmin::{
-    core::Executor,
+    core::{Executor, observers::ObserverMode},
     solver::{
         linesearch::HagerZhangLineSearch,
         neldermead::NelderMead,
@@ -15,11 +17,14 @@ use argmin::{
         simulatedannealing::SimulatedAnnealing,
     },
 };
+use argmin_observer_slog::SlogLogger;
 use ndarray::{Array1, Array2, ArrayView1, array, s};
 
 use ndarray_linalg::Solve;
 use plotters::prelude::*;
-use simple_model_predictive_control::prelude::*;
+use simple_model_predictive_control::{
+    dynamics_optimizer::DynamicsOptimizer, dynamics_problem::DynamicsFunction, prelude::*,
+};
 
 // link 1 angle CCW from right (rad), link 2 angle of deflection CCW *from link 1* (rad), link 1 angular velocity (rad/s), link 2 angular velocity (rad/s)
 const STATE_SIZE: usize = 4;
@@ -28,10 +33,10 @@ const STATE_SIZE: usize = 4;
 const INPUT_SIZE: usize = 1;
 
 // timestep (s)
-const DT: f64 = 0.05; // (s)
+const DT: f64 = 0.2; // (s)
 
 // lookahead time (s)
-const LOOKAHEAD: f64 = 5.0;
+const LOOKAHEAD: f64 = 10.0;
 
 // start pointing straight down
 const INITIAL_STATE: [f64; 4] = [-PI / 2., 0., 0., 0.];
@@ -54,7 +59,7 @@ const I1: f64 = 1. / 3. * M1 * L1 * L1; // kg m^2
 const I2: f64 = 1. / 3. * M2 * L2 * L2; // kg m^2
 
 // get capital M (2x2) as a function of the state
-fn mass_matrix(state: &[f64; STATE_SIZE]) -> Array2<f64> {
+fn mass_matrix(state: &Array1<f64>) -> Array2<f64> {
     let theta2 = state[1];
     array![
         [
@@ -72,7 +77,7 @@ fn mass_matrix(state: &[f64; STATE_SIZE]) -> Array2<f64> {
 }
 
 // get the contribution from derivatives (2x1) as a function of the state
-fn coriolis_matrix(state: &[f64; STATE_SIZE]) -> Array2<f64> {
+fn coriolis_matrix(state: &Array1<f64>) -> Array2<f64> {
     let theta2 = state[1];
     let omega1 = state[2];
     let omega2 = state[3];
@@ -85,7 +90,7 @@ fn coriolis_matrix(state: &[f64; STATE_SIZE]) -> Array2<f64> {
 }
 
 // get the torque due to gravity, tau (2x1), as a function of the state
-fn gravity_torque_matrix(state: &[f64; STATE_SIZE]) -> Array2<f64> {
+fn gravity_torque_matrix(state: &Array1<f64>) -> Array2<f64> {
     let theta1 = state[0];
     let theta2 = state[1];
     array![
@@ -96,7 +101,7 @@ fn gravity_torque_matrix(state: &[f64; STATE_SIZE]) -> Array2<f64> {
 }
 
 // return function's derivatives at a given state and with a given input
-fn state_derivative(state: &[f64; STATE_SIZE], input: &ArrayView1<f64>) -> [f64; STATE_SIZE] {
+fn state_derivative(state: &Array1<f64>, input: ArrayView1<f64>) -> Array1<f64> {
     let fx = input[0].clamp(-INPUT_MAX, INPUT_MAX);
     // input mapping matrix
     let b = array![[0.], [1.]];
@@ -111,7 +116,7 @@ fn state_derivative(state: &[f64; STATE_SIZE], input: &ArrayView1<f64>) -> [f64;
 
     let friction_coeff = 0.;
 
-    [
+    array![
         state[2],
         state[3],
         second_derivative[0] - friction_coeff * state[2],
@@ -120,10 +125,10 @@ fn state_derivative(state: &[f64; STATE_SIZE], input: &ArrayView1<f64>) -> [f64;
 }
 
 // integrate with RK4 instead of explicit euler for stability
-fn rk4_step(state: &[f64; STATE_SIZE], input: &ArrayView1<f64>, dt: f64) -> [f64; STATE_SIZE] {
+fn rk4_step(state: &Array1<f64>, input: ArrayView1<f64>, dt: f64) -> Array1<f64> {
     let k1 = state_derivative(state, input);
 
-    let mut tmp = [0.0; STATE_SIZE];
+    let mut tmp = array![0., 0., 0., 0.];
     for i in 0..STATE_SIZE {
         tmp[i] = state[i] + 0.5 * dt * k1[i];
     }
@@ -139,7 +144,7 @@ fn rk4_step(state: &[f64; STATE_SIZE], input: &ArrayView1<f64>, dt: f64) -> [f64
     }
     let k4 = state_derivative(&tmp, input);
 
-    let mut new_state = [0.0; STATE_SIZE];
+    let mut new_state = array![0., 0., 0., 0.];
     for i in 0..STATE_SIZE {
         new_state[i] = state[i] + dt * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]) / 6.0;
     }
@@ -153,11 +158,7 @@ fn rk4_step(state: &[f64; STATE_SIZE], input: &ArrayView1<f64>, dt: f64) -> [f64
 }
 
 // dynamics for this example are from https://courses.ece.ucsb.edu/ECE179/179D_S12Byl/hw/acrobot_swingup.pdf
-fn dynamics_function(
-    state: &[f64; STATE_SIZE],
-    input: &ArrayView1<f64>,
-    dt: Duration,
-) -> [f64; STATE_SIZE] {
+fn dynamics_function(state: &Array1<f64>, input: ArrayView1<f64>, dt: Duration) -> Array1<f64> {
     let dt = dt.as_secs_f64();
     if dt <= 0. {
         return state.clone();
@@ -165,16 +166,12 @@ fn dynamics_function(
     let n_rk4_steps = 1;
     let mut state = state.clone();
     for _ in 0..n_rk4_steps {
-        state = rk4_step(&state, input, dt / (n_rk4_steps as f64));
+        state = rk4_step(&state, input.view(), dt / (n_rk4_steps as f64));
     }
     state
 }
 
-fn state_cost(
-    state: &[f64; STATE_SIZE],
-    _setpoint: &[f64; STATE_SIZE],
-    _command: &ArrayView1<f64>,
-) -> f64 {
+fn state_cost(state: &Array1<f64>, _setpoint: &Array1<f64>) -> f64 {
     let theta1 = state[0];
     let theta2 = state[1];
     let omega1 = state[2];
@@ -203,22 +200,34 @@ fn state_cost(
     (kinetic_energy - pe_diff).max(0.) + pe_diff
 }
 
-// fn get_mpc_problem(
-//     initial_conditions: [f64; STATE_SIZE],
-//     setpoint: [f64; STATE_SIZE],
-// ) -> MPCProblem<STATE_SIZE, INPUT_SIZE> {
-//     MPCProblemBuilder::<STATE_SIZE, INPUT_SIZE>::new()
-//         .dynamics_function(DynamicsFunction::Discrete(Box::new(&dynamics_function)))
-//         .state_cost(&state_cost)
-//         .lookahead_duration(Duration::from_secs_f64(LOOKAHEAD))
-//         .sample_period(Duration::from_secs_f64(DT))
-//         .setpoint(setpoint)
-//         .initial_conditions(initial_conditions)
-//         .build()
-//         .unwrap()
-// }
+fn simple_dynamics_cost_function(
+    _state: &Array1<Array1<f64>>,
+    inputs: &Array1<f64>,
+    _setpoint: &Array1<f64>,
+) -> f64 {
+    inputs.map(|input| input.abs()).sum()
+}
 
-fn plot(trajectory: Array1<[f64; STATE_SIZE]>) -> Result<(), Box<dyn std::error::Error>> {
+fn get_mpc_problem(
+    initial_conditions: Array1<f64>,
+    setpoint: Array1<f64>,
+) -> (MPCProblem, DynamicsOptimizer) {
+    let mpc_problem = MPCProblem::new(
+        setpoint,
+        initial_conditions,
+        Duration::from_secs_f64(DT),
+        Duration::from_secs_f64(LOOKAHEAD),
+        DynamicsFunction::Discrete(Arc::new(dynamics_function)),
+        INPUT_SIZE,
+        Arc::new(state_cost),
+        Box::new(simple_dynamics_cost_function),
+    );
+    let dynamics_optimizer =
+        DynamicsOptimizer::new(array![-100.], array![100.], &mpc_problem, 1e-2);
+    (mpc_problem, dynamics_optimizer)
+}
+
+fn plot(trajectory: Array1<Array1<f64>>) -> Result<(), Box<dyn std::error::Error>> {
     let now = Instant::now();
     // don't render any faster than 100 fps; if we're simulating faster than that this will result in a little slow-mo, which is ok
     let frame_time = ((DT * 1000.).round() as u32).max(50);
@@ -228,7 +237,7 @@ fn plot(trajectory: Array1<[f64; STATE_SIZE]>) -> Result<(), Box<dyn std::error:
     for i in (0..trajectory.len()).step_by(((0.1 / DT) as usize).max(1)) {
         root.fill(&WHITE)?;
 
-        let point = trajectory[i];
+        let point = trajectory[i].view();
 
         let aspect_ratio = 1280. / 720.;
         let y_bound = 4.0;
@@ -271,7 +280,7 @@ fn plot(trajectory: Array1<[f64; STATE_SIZE]>) -> Result<(), Box<dyn std::error:
 }
 
 // change the trajectory from (theta1, theta2, omega1, omega2) to (x_end1, y_end1, x_end2, y_end2)
-fn trajectory_to_plot_format(trajectory: &mut Array1<[f64; 4]>) {
+fn trajectory_to_plot_format(trajectory: &mut Array1<Array1<f64>>) {
     trajectory.iter_mut().for_each(|state| {
         // tip of first link
         let x1 = L1 * state[0].cos();
@@ -288,105 +297,92 @@ fn trajectory_to_plot_format(trajectory: &mut Array1<[f64; 4]>) {
     });
 }
 
-#[cfg(debug_assertions)]
-const OUT_FILE_NAME: &str = "acrobot_debug.gif";
-#[cfg(not(debug_assertions))]
-const OUT_FILE_NAME: &str = "acrobot_release.gif";
+fn plot_tree(tree_segments: Vec<([f64; 2], [f64; 2])>) -> Result<(), Box<dyn std::error::Error>> {
+    let root = BitMapBackend::new("tree.bmp", (1280, 720)).into_drawing_area();
+    root.fill(&WHITE)?;
+    let (x_extent, y_extent) = tree_segments
+        .iter()
+        .fold((0.0_f64, 0.0_f64), |acc, (p1, p2)| {
+            (
+                acc.0.max(p1[0].abs()).max(p2[0].abs()),
+                acc.1.max(p1[1].abs()).max(p2[1].abs()),
+            )
+        });
+
+    let x_extent = x_extent.max(GOAL[0] + 0.01);
+    let y_extent = y_extent.max(GOAL[2] + 0.01);
+    let mut chart = ChartBuilder::on(&root)
+        .caption("MPC Tree", ("sans-serif", 50))
+        .margin(5)
+        .x_label_area_size(30)
+        .y_label_area_size(30)
+        .build_cartesian_2d((-x_extent)..x_extent, (-y_extent)..y_extent)
+        .unwrap();
+    chart.configure_mesh().draw()?;
+
+    chart.draw_series(std::iter::once(Circle::new(
+        (GOAL[0], GOAL[2]),
+        5,
+        GREEN.filled(),
+    )))?;
+    for (point_1, point_2) in tree_segments {
+        chart.draw_series(std::iter::once(Circle::new(
+            (point_2[0], point_2[1]),
+            1,
+            BLUE.filled(),
+        )))?;
+        chart.draw_series(LineSeries::new(
+            once((point_1[0], point_1[1])).chain(once((point_2[0], point_2[1]))),
+            ShapeStyle::from(&RED.mix(0.5)).stroke_width(1),
+        ))?;
+    }
+
+    root.present()?;
+    Ok(())
+}
+
+const OUT_FILE_NAME: &str = "acrobot.gif";
+
 // see plotters animation example for reference:
 // https://github.com/plotters-rs/plotters/blob/master/plotters/examples/animation.rs
 pub fn main() {
-    // println!("Running acrobot MPC simulation...");
-    // let now = Instant::now();
-    // let mut trajectory = Array1::<[f64; 4]>::default(0);
+    println!("Running acrobot MPC simulation...");
+    let now = Instant::now();
+    let mut trajectory = Array1::<Array1<f64>>::default(0);
 
-    // let mut state = INITIAL_STATE;
+    let mut initial_state = array![0., 0., 0., 0.];
 
-    // // how many lookahead periods we should do
-    // let target_time = 25.;
-    // let num_chunks = 2 * (target_time / LOOKAHEAD).ceil() as usize;
-    // let n = (LOOKAHEAD / DT).ceil() as usize;
-    // let n_half = (LOOKAHEAD / 2. / DT).ceil() as usize;
+    // how many lookahead periods we should do
+    let num_chunks = 1;
+    let goal = Array1::from_iter(GOAL.into_iter());
 
-    // let min = Array1::ones(n * INPUT_SIZE) * -INPUT_MAX;
-    // let max = Array1::ones(n * INPUT_SIZE) * INPUT_MAX;
-    // let linesearch = HagerZhangLineSearch::new();
+    for _ in 0..num_chunks {
+        let (mut mpc_problem, mut solver) = get_mpc_problem(initial_state.clone(), goal.clone());
+        // Run solver
+        let res = Executor::new(mpc_problem, solver)
+            .configure(|state| state.max_iters(1000))
+            .add_observer(SlogLogger::term(), ObserverMode::Always)
+            .run()
+            .unwrap();
 
-    // for index in 0..num_chunks {
-    //     let mpc_problem = get_mpc_problem(state, GOAL);
+        plot_tree(res.solver.get_line_segments(0, 1)).unwrap();
 
-    //     let pso_warmstart_solver = ParticleSwarm::new((min.clone(), max.clone()), 10000);
-    //     let pso_res = Executor::new(mpc_problem, pso_warmstart_solver)
-    //         .configure(|state| state.max_iters(10))
-    //         .run()
-    //         .unwrap();
+        mpc_problem = res.problem.problem.unwrap();
+        let this_trajectory =
+            mpc_problem.calculate_trajectory(res.state.best_param.unwrap().view());
+        trajectory
+            .append(ndarray::Axis(0), this_trajectory.view())
+            .unwrap();
+        initial_state = this_trajectory.last().unwrap().clone();
+    }
 
-    //     // use the best particle and n others for the nelder-mead simplex
-    //     let mpc_problem = get_mpc_problem(state, GOAL);
+    trajectory_to_plot_format(&mut trajectory);
 
-    //     // sort them lowest to highest
-    //     let mut sorted_particles = pso_res
-    //         .state
-    //         .get_population()
-    //         .unwrap()
-    //         .iter()
-    //         .collect::<Vec<&Particle<Array1<f64>, f64>>>();
-    //     sorted_particles.sort_by(|&particle1, particle2| particle1.cost.total_cmp(&particle2.cost));
-
-    //     // take the n+1 lowest-cost particles and use them as the simplex
-    //     let parameters: Vec<Array1<f64>> = sorted_particles
-    //         .iter()
-    //         .take(n + 1)
-    //         .map(|particle| particle.position.clone())
-    //         .collect();
-
-    //     let nm_solver = NelderMead::new(parameters);
-    //     let nm_res = Executor::new(mpc_problem, nm_solver)
-    //         .configure(|state| state.max_iters(10000))
-    //         .run()
-    //         .unwrap();
-
-    //     let best_result = nm_res.state.best_param.unwrap();
-
-    //     let mpc_problem = get_mpc_problem(state, GOAL);
-
-    //     let annealing_solver = SimulatedAnnealing::new(30.).unwrap();
-    //     // Run solver
-    //     let annealing_res = Executor::new(mpc_problem, annealing_solver)
-    //         .configure(|state| state.param(best_result).max_iters(1000))
-    //         .run()
-    //         .unwrap();
-
-    //     let best_result = annealing_res.state.best_param.unwrap();
-
-    //     let mpc_problem = get_mpc_problem(state, GOAL);
-
-    //     let lbfgs_solver = LBFGS::new(linesearch.clone(), 7);
-    //     // Run solver
-    //     let lbfgs_res = Executor::new(mpc_problem, lbfgs_solver)
-    //         .configure(|state| state.param(best_result).max_iters(1000))
-    //         .run()
-    //         .unwrap();
-
-    //     let mpc_problem = get_mpc_problem(state, GOAL);
-
-    //     // update start position and append to overall trajectory
-    //     // only use first half of inputs
-    //     let inputs = lbfgs_res.state.best_param.unwrap();
-    //     let this_trajectory = mpc_problem.calculate_trajectory(&inputs.slice(s![..n_half]));
-    //     trajectory
-    //         .append(ndarray::Axis(0), this_trajectory.view())
-    //         .unwrap();
-    //     state = *this_trajectory.last().unwrap();
-    //     println!("Chunk {}/{} complete", index + 1, num_chunks);
-    // }
-
-    // trajectory_to_plot_format(&mut trajectory);
-
-    // let elapsed = now.elapsed();
-    // println!(
-    //     "MPC simulation of {:.1} seconds complete in {:.1} seconds, now plotting...",
-    //     (num_chunks as f64) * LOOKAHEAD / 2.,
-    //     elapsed.as_secs_f64()
-    // );
-    // plot(trajectory).unwrap();
+    let elapsed = now.elapsed();
+    println!(
+        "MPC simulation of {:.1} seconds complete in {:.1} seconds, now plotting...",
+        (num_chunks as f64) * LOOKAHEAD,
+        elapsed.as_secs_f64()
+    );
+    plot(trajectory).unwrap();
 }

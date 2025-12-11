@@ -184,7 +184,7 @@ pub fn main() {
         .run()
         .unwrap();
 
-    plot_tree(res.solver.get_line_segments()).unwrap();
+    plot_tree(res.solver.get_line_segments(0, 2)).unwrap();
 
     let mpc_problem = res.problem.problem.unwrap();
 
