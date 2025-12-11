@@ -1,16 +1,10 @@
-#![allow(unused)]
-
 use std::{
     f64::consts::{PI, TAU},
-    iter::once,
     sync::Arc,
     time::{Duration, Instant},
 };
 
-use argmin::{
-    core::{Executor, observers::ObserverMode},
-    solver::neldermead::NelderMead,
-};
+use argmin::core::{Executor, observers::ObserverMode};
 use argmin_observer_slog::SlogLogger;
 use ndarray::{Array1, ArrayView1, array};
 
@@ -24,7 +18,7 @@ use simple_model_predictive_control::{
 
 // cart position (m), cart velocity (m/s), angle (rad), angular velocity (rad)
 // the angle state is positive CCW and
-const STATE_SIZE: usize = 4;
+// const STATE_SIZE: usize = 4;
 
 // x force on cart (N)
 const INPUT_SIZE: usize = 1;
@@ -117,14 +111,6 @@ fn dynamics_function(state: &Array1<f64>, input: ArrayView1<f64>, dt: Duration) 
         }
     }
     state
-}
-
-fn terminal_cost(state: &[f64; STATE_SIZE], setpoint: &[f64; STATE_SIZE]) -> f64 {
-    let weight: [f64; STATE_SIZE] = [1., 1., 1., 1.];
-    // for terminal cost, penalize velocity off setpoint too
-    (0..STATE_SIZE).fold(0., |acc, i| {
-        acc + weight[i] * (state[i] - setpoint[i]).powi(2)
-    })
 }
 
 fn state_cost(state: &Array1<f64>, setpoint: &Array1<f64>) -> f64 {
@@ -259,7 +245,7 @@ fn plot_tree(tree_segments: Vec<([f64; 2], [f64; 2])>) -> Result<(), Box<dyn std
         5,
         GREEN.filled(),
     )))?;
-    for (point_1, point_2) in tree_segments {
+    for (_point_1, point_2) in tree_segments {
         chart.draw_series(std::iter::once(Circle::new(
             (point_2[0], point_2[1]),
             1,
@@ -284,7 +270,7 @@ pub fn main() {
     let goal = Array1::from_iter(GOAL.into_iter());
 
     for _ in 0..num_chunks {
-        let (mut mpc_problem, mut solver) = get_mpc_problem(initial_state.clone(), goal.clone());
+        let (mut mpc_problem, solver) = get_mpc_problem(initial_state.clone(), goal.clone());
         // Run solver
         let res = Executor::new(mpc_problem, solver)
             .configure(|state| state.max_iters(1000))

@@ -79,10 +79,12 @@ impl PartialOrd for Solution {
 }
 
 pub struct DynamicsOptimizerSettings {
-    branching_factor: usize,
-    nelder_mead_iters: usize,
-    particle_count: usize,
-    target_size_override: Option<usize>,
+    pub branching_factor: usize,
+    pub nelder_mead_iters: usize,
+    pub particle_count: usize,
+    pub target_size_override: Option<usize>,
+    pub iter_prune_number: usize,
+    pub iter_grow_number: usize,
 }
 
 impl Default for DynamicsOptimizerSettings {
@@ -92,6 +94,8 @@ impl Default for DynamicsOptimizerSettings {
             nelder_mead_iters: 1000,
             particle_count: 1000,
             target_size_override: None,
+            iter_grow_number: 10,
+            iter_prune_number: 10,
         }
     }
 }
@@ -120,6 +124,8 @@ pub struct DynamicsOptimizer {
     branching_factor: usize,
     nelder_mead_iters: usize,
     particle_count: usize,
+    iter_prune_number: usize,
+    iter_grow_number: usize,
 }
 
 #[derive(Clone)]
@@ -178,6 +184,8 @@ impl DynamicsOptimizer {
             branching_factor: settings.branching_factor,
             nelder_mead_iters: settings.nelder_mead_iters,
             particle_count: settings.particle_count,
+            iter_grow_number: settings.iter_grow_number,
+            iter_prune_number: settings.iter_prune_number,
         }
     }
 
@@ -535,13 +543,13 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
 
         let action = if (self.dynamics_tree.nodes().count() - self.orphans.len()) < self.target_size
         {
-            if self.grow_nodes(10) {
+            if self.grow_nodes(self.iter_grow_number) {
                 TreeOptimizationAction::Grow
             } else {
                 TreeOptimizationAction::Prune
             }
         } else {
-            self.prune_nodes(10);
+            self.prune_nodes(self.iter_prune_number);
             TreeOptimizationAction::Prune
         };
 

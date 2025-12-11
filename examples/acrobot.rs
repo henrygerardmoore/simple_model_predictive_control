@@ -1,5 +1,3 @@
-#![allow(unused)]
-
 use std::{
     f64::consts::{PI, TAU},
     iter::once,
@@ -7,18 +5,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use argmin::{
-    core::{Executor, observers::ObserverMode},
-    solver::{
-        linesearch::HagerZhangLineSearch,
-        neldermead::NelderMead,
-        particleswarm::{Particle, ParticleSwarm},
-        quasinewton::LBFGS,
-        simulatedannealing::SimulatedAnnealing,
-    },
-};
+use argmin::core::{Executor, observers::ObserverMode};
 use argmin_observer_slog::SlogLogger;
-use ndarray::{Array1, Array2, ArrayView1, array, s};
+use ndarray::{Array1, Array2, ArrayView1, array};
 
 use ndarray_linalg::Solve;
 use plotters::prelude::*;
@@ -35,18 +24,18 @@ const STATE_SIZE: usize = 4;
 const INPUT_SIZE: usize = 1;
 
 // timestep (s)
-const DT: f64 = 0.2; // (s)
+const DT: f64 = 0.3; // (s)
 
 // lookahead time (s)
 const LOOKAHEAD: f64 = 10.0;
 
 // start pointing straight down
-const INITIAL_STATE: [f64; 4] = [-PI / 2., 0., 0., 0.];
+// const INITIAL_STATE: [f64; 4] = [-PI / 2., 0., 0., 0.];
 // both arms pointing straight up
 const GOAL: [f64; 4] = [PI / 2., 0., 0., 0.];
 
 // acrobot parameters
-const INPUT_MAX: f64 = 20.; // N*m
+const INPUT_MAX: f64 = 50.; // N*m
 const GRAVITY: f64 = -9.80665; // m/s^2
 const L1: f64 = 2.0; // m
 // length to center of 1
@@ -225,8 +214,8 @@ fn get_mpc_problem(
         Box::new(simple_dynamics_cost_function),
     );
     let dynamics_optimizer = DynamicsOptimizer::new(
-        array![-100.],
-        array![100.],
+        array![-INPUT_MAX],
+        array![INPUT_MAX],
         &mpc_problem,
         1e-2,
         DynamicsOptimizerSettings::default(),
@@ -353,10 +342,10 @@ pub fn main() {
     let goal = Array1::from_iter(GOAL.into_iter());
 
     for _ in 0..num_chunks {
-        let (mut mpc_problem, mut solver) = get_mpc_problem(initial_state.clone(), goal.clone());
+        let (mut mpc_problem, solver) = get_mpc_problem(initial_state.clone(), goal.clone());
         // Run solver
         let res = Executor::new(mpc_problem, solver)
-            .configure(|state| state.max_iters(1))
+            .configure(|state| state.max_iters(1000))
             .add_observer(SlogLogger::term(), ObserverMode::Always)
             .run()
             .unwrap();
