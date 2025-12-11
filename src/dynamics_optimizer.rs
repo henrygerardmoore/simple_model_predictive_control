@@ -96,8 +96,8 @@ impl Default for DynamicsOptimizerSettings {
             nelder_mead_iters: 20,
             particle_count: 50,
             target_size_override: None,
-            iter_grow_number: 20,
-            iter_prune_number: 20,
+            iter_grow_number: 50,
+            iter_prune_number: 50,
             time_limit: None,
         }
     }
