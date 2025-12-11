@@ -302,10 +302,10 @@ impl DynamicsOptimizer {
         branch_factor: usize,
     ) -> impl Iterator<Item = (f64, DynamicsProblem, Array1<f64>)> {
         // TODO use manual random sampling instead of particle swarm
-        let solver = ParticleSwarm::new((input_min_max.0.clone(), input_min_max.1.clone()), 100);
+        let solver = ParticleSwarm::new((input_min_max.0.clone(), input_min_max.1.clone()), 500);
 
         let res = Executor::new(parent_dynamics.clone(), solver)
-            .configure(|state| state.max_iters(10).target_cost(epsilon))
+            .configure(|state| state.max_iters(1).target_cost(epsilon))
             .run()
             .unwrap();
 
