@@ -71,7 +71,7 @@ pub struct DynamicsOptimizer {
 
     state_cost_epsilon: f64,
 
-    // TODO: try including all nodes in this
+    // TODO: try including all nodes in this, changing cost of node after it has had many children added to it
     leaves: BTreeSet<NodeIDAndCost>,
 }
 
@@ -195,6 +195,8 @@ impl DynamicsOptimizer {
 
     // find `num_nodes` leaves via importance sampling and grow them
     fn grow_nodes(&mut self, num_nodes: usize) -> bool {
+        // TODO: weight by 1/cost + distance from node state space centroid, add running node centroid calculation
+        // TODO: try weighting whole branch
         let (ids, weights): (Vec<_>, Vec<_>) = self
             .leaves
             .iter()
@@ -355,6 +357,7 @@ impl DynamicsOptimizer {
 
     // find the `num_nodes` worst leaves and prune them
     fn prune_nodes(&mut self, num_nodes: usize) {
+        // TODO: prune whole unpromising branches, maybe if many children end up in high cost area
         let ids_to_prune: Vec<NodeId> = self
             .leaves
             .iter()
