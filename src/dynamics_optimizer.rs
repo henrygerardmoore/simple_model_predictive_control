@@ -383,9 +383,12 @@ impl DynamicsOptimizer {
         let uniform_dist = Uniform::new(0., 1.);
         let unit_randoms = Array::random((num_particles, dimension), uniform_dist);
 
-        // Process each particle
+        // make block inputs
+        let inputs = &unit_randoms * &ranges + minima;
+
+        // iterate over each row and calculate cost and push to return vec
         for i in 0..num_particles {
-            let input = minima + &(&unit_randoms.row(i).to_owned() * &ranges);
+            let input = inputs.row(i).to_owned();
             let cost = dynamics.cost(&input).unwrap();
             particles.push(Particle { input, cost });
         }
