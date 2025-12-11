@@ -1,0 +1,2 @@
+[target.'cfg(profile = "heavy_optimization")']
+rustflags = ["-C", "target-cpu=native"]

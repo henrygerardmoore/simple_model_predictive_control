@@ -10,9 +10,9 @@
 //! I created this library for a simple, pure-rust MPC implementation with no code generation.
 //! See the [repository](github.com/henrygerardmoore/simple_model_predictive_control/) for more information.
 
+pub mod dynamics_optimizer;
+pub mod dynamics_problem;
 pub mod mpc_problem;
-pub mod mpc_problem_builder;
-pub mod test;
 
 /// Things that will be most commonly `use`'d in one convenient export
 pub mod prelude;

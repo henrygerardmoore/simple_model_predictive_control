@@ -9,13 +9,31 @@ license = "MIT OR Apache-2.0"
 keywords = ["mpc","model-predictive-control","model-predictive","argmin","nonlinear","control"]
 
 [dependencies]
+approx = "0.5.1"
 argmin = {version="0.11.0", features=["rayon"]}
 argmin-math = {version = "0.5.1", features = ["ndarray_latest"]}
 argmin-observer-slog = "0.2.0"
+ego-tree = "0.10.0"
 env_logger = "0.11.8"
 finitediff = {version="0.2.0", features = ["ndarray"]}
 log = "0.4.28"
 ndarray = {version = "0.16", features = ["rayon", "serde"]}
 ndarray-linalg = { version = "0.17", features = ["intel-mkl-static"] }
+ndarray-rand = "0.15.0"
 plotters = "0.3.7"
-rand = "0.9.2"
+
+# cargo run --profile heavy_optimization --example acrobot
+[profile.heavy_optimization]
+inherits = "release"
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+
+
+[features]
+profiling = []
+
+# run with: `cargo flamegraph --profile profiling --features profiling --example acrobot`
+[profile.profiling]
+inherits = "release"
+debug = true  # Include debug symbols for better flamegraph annotations

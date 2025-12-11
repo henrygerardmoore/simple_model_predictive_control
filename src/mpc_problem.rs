@@ -1,87 +1,125 @@
 use core::f64;
-use std::{sync::Mutex, time::Duration};
+use std::{sync::Arc, time::Duration};
 
-use argmin::{
-    core::{CostFunction, Gradient},
-    solver::simulatedannealing::Anneal,
-};
-use finitediff::ndarr;
+use argmin::core::CostFunction;
 use ndarray::{
-    Array, Array1, ArrayView1, ArrayView2,
+    Array, Array1, ArrayView1,
     parallel::prelude::{IntoParallelRefIterator, ParallelIterator},
 };
-use rand::{Rng, distr::Uniform, rngs::StdRng};
 
-/// The dynamics function used by [MPCProblem]
-///
-/// The [MPCProblem] takes either:
-/// - a function that returns the derivative and integrates it internally as needed
-///
-/// OR
-///
-/// - a function that takes a state and a time delta and returns the next state
-///
-/// If you want fine control of the integration or have dynamics that cannot be captured by a derivative, then you should use [DynamicsFunction::Discrete]
-#[allow(
-    clippy::type_complexity,
-    reason = "dynamics function closures have complex types"
-)]
-pub enum DynamicsFunction<const STATE_SIZE: usize, const INPUT_SIZE: usize> {
-    /// f(x, u) -> xdot
-    Continuous(
-        Box<dyn Fn(&[f64; STATE_SIZE], &ArrayView1<f64>) -> [f64; STATE_SIZE] + Send + Sync>,
-    ),
-    /// f(x_k, u_k, dt) -> x_{k+1}
-    Discrete(
-        Box<
-            dyn Fn(&[f64; STATE_SIZE], &ArrayView1<f64>, Duration) -> [f64; STATE_SIZE]
-                + Send
-                + Sync,
-        >,
-    ),
+use crate::dynamics_problem::{DynamicsFunction, DynamicsProblem, StateCostFunction};
+
+/// f(trajectory, inputs, setpoint) -> cost
+pub type TrajectoryCostFunction =
+    dyn Fn(&Array1<Array1<f64>>, &Array1<f64>, &Array1<f64>) -> f64 + Send + Sync;
+/// Trait indicating that an argmin problem has a dynamics subproblem, used in DynamicsOptimizer Solver
+pub trait DynamicsSubProblem {
+    fn get_dynamics(&self, state: Array1<f64>) -> DynamicsProblem;
+    fn get_state(&self) -> &Array1<f64>;
+    fn get_lookahead(&self) -> &Duration;
 }
 
-/// The Model-Predictive Control problem, formulated as a problem solvable by `argmin`
-#[allow(
-    clippy::type_complexity,
-    reason = "cost function closures have complex types"
-)]
-pub struct MPCProblem<const STATE_SIZE: usize, const INPUT_SIZE: usize> {
-    pub(crate) setpoint: [f64; STATE_SIZE],
-    pub(crate) current_state: [f64; STATE_SIZE],
+pub struct MPCProblem {
+    pub(crate) setpoint: Arc<Array1<f64>>,
+    pub(crate) current_state: Array1<f64>,
     pub(crate) sample_period: Duration,
     pub(crate) lookahead_duration: Duration,
-    pub(crate) dynamics_function: DynamicsFunction<STATE_SIZE, INPUT_SIZE>,
+    pub(crate) dynamics_function: DynamicsFunction,
 
-    /// `MPCProblem` must have at least one of `state_cost` and `terminal_cost`.
-    /// Optional state/input cost function, J(x, u) -> f64
-    pub(crate) state_cost: Option<
-        Box<dyn Fn(&[f64; STATE_SIZE], &[f64; STATE_SIZE], &ArrayView1<f64>) -> f64 + Send + Sync>,
-    >,
+    pub(crate) input_size: usize,
 
-    /// `MPCProblem` must have at least one of `state_cost` and `terminal_cost`.
-    /// Optional terminal cost function, J(x, x_setpoint) -> f64
-    pub(crate) terminal_cost:
-        Option<Box<dyn Fn(&[f64; STATE_SIZE], &[f64; STATE_SIZE]) -> f64 + Send + Sync>>,
+    pub(crate) state_cost_function: Arc<StateCostFunction>,
+    pub(crate) dynamics_cost_function: Box<TrajectoryCostFunction>,
+}
 
-    pub(crate) rng: Mutex<StdRng>,
+impl DynamicsSubProblem for MPCProblem {
+    fn get_dynamics(&self, state: Array1<f64>) -> DynamicsProblem {
+        DynamicsProblem {
+            dynamics_function: self.dynamics_function.clone(),
+            state_cost_function: self.state_cost_function.clone(),
+            state,
+            set_point: self.setpoint.clone(),
+            dt: self.sample_period,
+        }
+    }
+
+    fn get_state(&self) -> &Array1<f64> {
+        &self.current_state
+    }
+
+    fn get_lookahead(&self) -> &Duration {
+        &self.lookahead_duration
+    }
+}
+
+impl MPCProblem {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        setpoint: Array1<f64>,
+        current_state: Array1<f64>,
+        sample_period: Duration,
+        lookahead_duration: Duration,
+        dynamics_function: DynamicsFunction,
+        input_size: usize,
+        state_cost_function: Arc<StateCostFunction>,
+        dynamics_cost_function: Box<TrajectoryCostFunction>,
+    ) -> Self {
+        Self {
+            setpoint: Arc::new(setpoint),
+            current_state,
+            sample_period,
+            lookahead_duration,
+            dynamics_function,
+            input_size,
+            state_cost_function,
+            dynamics_cost_function,
+        }
+    }
+    pub fn calculate_trajectory(&self, inputs: ArrayView1<f64>) -> Array1<Array1<f64>> {
+        let mut current_state = self.current_state.clone();
+
+        Array::from_iter(
+            inputs
+                .exact_chunks(self.input_size)
+                .into_iter()
+                .map(|input| {
+                    let next_state = self.dynamics_function.get_next_state(
+                        &current_state,
+                        input,
+                        self.sample_period,
+                    );
+                    current_state = next_state;
+                    current_state.clone()
+                }),
+        )
+    }
+
+    /// Calculates the cost of a given trajectory
+    pub(crate) fn calculate_trajectory_cost(
+        &self,
+        trajectory: &Array1<Array1<f64>>,
+        inputs: &Array1<f64>,
+    ) -> f64 {
+        (self.dynamics_cost_function)(trajectory, inputs, &self.setpoint)
+    }
+
+    pub fn set_dt(&mut self, dt: Duration) {
+        self.sample_period = dt;
+    }
 }
 
 /// Implement `argmin`'s `CostFunction` type.
 /// This allows usage of any gradient-free optimizer from `argmin`.
-impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> CostFunction
-    for MPCProblem<STATE_SIZE, INPUT_SIZE>
-{
+impl CostFunction for MPCProblem {
     type Param = Array1<f64>;
 
     type Output = f64;
 
     /// Calculate the trajectory for a given series of inputs,
     /// then calculate the cost of that trajectory.
-    fn cost(&self, x: &Self::Param) -> Result<Self::Output, argmin::core::Error> {
-        let x_view = x.view();
-        let trajectory = self.calculate_trajectory(&x_view);
-        let trajectory_cost = self.calculate_trajectory_cost(&trajectory, &x_view);
+    fn cost(&self, inputs: &Self::Param) -> Result<Self::Output, argmin::core::Error> {
+        let trajectory = self.calculate_trajectory(inputs.view());
+        let trajectory_cost = self.calculate_trajectory_cost(&trajectory, inputs);
         Ok(trajectory_cost)
     }
 
@@ -97,192 +135,118 @@ impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> CostFunction
     }
 }
 
-impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> Gradient
-    for MPCProblem<STATE_SIZE, INPUT_SIZE>
-{
-    type Param = Array1<f64>;
+#[cfg(test)]
+mod test {
+    use std::{sync::Arc, time::Duration};
 
-    type Gradient = Array1<f64>;
+    use argmin::{
+        core::{CostFunction, Executor},
+        solver::neldermead::NelderMead,
+    };
+    use ndarray::{Array1, ArrayView1, array};
+    use ndarray_linalg::Norm;
 
-    fn gradient(&self, param: &Self::Param) -> Result<Self::Gradient, argmin_math::Error> {
-        let f = self.cost_closure();
-        let g_forward = ndarr::forward_diff(&f);
-        g_forward(param)
+    use crate::{dynamics_problem::DynamicsFunction, prelude::MPCProblem};
+
+    const DT: f64 = 1.;
+    const LOOKAHEAD: f64 = 10.;
+    const INITIAL_POS: f64 = 1.0;
+    const INITIAL_VEL: f64 = 0.0;
+
+    // input is x acceleration, state is (x, vx)
+    fn simple_continuous_dynamics(state: &Array1<f64>, input: ArrayView1<f64>) -> Array1<f64> {
+        array![state[1], input[0]]
     }
 
-    fn bulk_gradient<P>(&self, params: &[P]) -> Result<Vec<Self::Gradient>, argmin_math::Error>
-    where
-        P: std::borrow::Borrow<Self::Param> + argmin::core::SyncAlias,
-        Self::Gradient: argmin::core::SendAlias,
-        Self: argmin::core::SyncAlias,
-    {
-        params
-            .par_iter()
-            .map(|p| self.gradient(p.borrow()))
-            .collect()
-    }
-}
-
-impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> Anneal
-    for MPCProblem<STATE_SIZE, INPUT_SIZE>
-{
-    type Param = Array1<f64>;
-
-    type Output = Array1<f64>;
-
-    type Float = f64;
-
-    fn anneal(
-        &self,
-        param: &Self::Param,
-        temp: Self::Float,
-    ) -> Result<Self::Output, argmin_math::Error> {
-        let mut param_n = param.clone();
-        let rng = &mut *self.rng.lock().unwrap();
-        let id_distr = Uniform::try_from(0..param.len())?;
-        let val_distr = Uniform::new_inclusive(-0.1, 0.1)?;
-        // Perform modifications to a degree proportional to the current temperature `temp`.
-        for _ in 0..(temp.floor() as u64 + 1) {
-            // Compute random index of the parameter vector using the supplied random number
-            // generator.
-            let idx = rng.sample(id_distr);
-
-            // Compute random number in [0.1, 0.1].
-            let val = rng.sample(val_distr);
-
-            // modify previous parameter value at random position `idx` by `val`
-            param_n[idx] += val;
-        }
-        Ok(param_n)
-    }
-}
-
-impl<const STATE_SIZE: usize, const INPUT_SIZE: usize> MPCProblem<STATE_SIZE, INPUT_SIZE> {
-    /// Simple euler integration for ODEs
-    pub(crate) fn integrate_dynamics(
-        &self,
-        current_state: &[f64; STATE_SIZE],
-        derivatives: &[f64; STATE_SIZE],
-    ) -> [f64; STATE_SIZE] {
-        // just do a simple Euler integration for now
-        let mut next_state = [0_f64; STATE_SIZE];
-        for i in 0..STATE_SIZE {
-            next_state[i] = current_state[i] + self.sample_period.as_secs_f64() * derivatives[i];
-        }
-        next_state
+    fn simple_state_cost_function(state: &Array1<f64>, setpoint: &Array1<f64>) -> f64 {
+        (state - setpoint).norm()
     }
 
-    /// Maps the inputs to the trajectory they would result in.
-    /// This is useful for visualization.
-    pub fn calculate_trajectory(&self, inputs: &ArrayView1<f64>) -> Array1<[f64; STATE_SIZE]> {
-        let mut current_state = self.current_state;
-        let input_chunks = Self::inputs_to_chunks(inputs);
-        let trajectory_iter = input_chunks.rows().into_iter().map(|input| {
-            let next_state = match &self.dynamics_function {
-                DynamicsFunction::Continuous(continuous_dynamics_function) => {
-                    let derivatives = continuous_dynamics_function(&current_state, &input);
-                    self.integrate_dynamics(&current_state, &derivatives)
-                }
-                DynamicsFunction::Discrete(discrete_dynamics_function) => {
-                    discrete_dynamics_function(&current_state, &input, self.sample_period)
-                }
-            };
-            current_state = next_state;
-            current_state
-        });
-
-        Array::from_iter(trajectory_iter)
-    }
-
-    /// Changes the inputs from a 1D array to a 2D array where every row is a step and every column is an input.
-    pub(crate) fn inputs_to_chunks<'a>(inputs: &ArrayView1<'a, f64>) -> ArrayView2<'a, f64> {
-        assert!(
-            inputs.len().is_multiple_of(INPUT_SIZE),
-            "inputs must be of length N * INPUT_SIZE where N is some nonnegative integer\nactual {} != N * {}",
-            inputs.len(),
-            INPUT_SIZE
-        );
-
-        let n_steps = inputs.len() / INPUT_SIZE;
-
-        unsafe { ArrayView2::from_shape_ptr((n_steps, INPUT_SIZE), inputs.as_ptr()) }
-    }
-
-    /// Calculates the cost of a given trajectory
-    pub(crate) fn calculate_trajectory_cost(
-        &self,
-        trajectory: &Array1<[f64; STATE_SIZE]>,
-        inputs: &ArrayView1<f64>,
+    // punish deviation of the last state from the goal and the input magnitude slightly
+    fn simple_dynamics_cost_function(
+        state: &Array1<Array1<f64>>,
+        inputs: &Array1<f64>,
+        setpoint: &Array1<f64>,
     ) -> f64 {
-        let input_chunks = Self::inputs_to_chunks(inputs);
-        let state_cost = if let Some(state_cost_function) = &self.state_cost {
-            trajectory.iter().zip(input_chunks.rows()).fold(
-                0.,
-                |accumulated_cost, (state, input)| {
-                    accumulated_cost + state_cost_function(state, &self.setpoint, &input)
-                },
-            )
-        } else {
-            0.
-        };
-        // terminal cost
-        state_cost
-            + trajectory
-                .last()
-                .map(|terminal_state| {
-                    if let Some(terminal_cost_function) = &self.terminal_cost {
-                        terminal_cost_function(terminal_state, &self.setpoint)
-                    } else {
-                        0.
-                    }
-                })
-                .unwrap_or(0.)
+        (state.last().unwrap() - setpoint).norm()
+            + 0.0000001 * inputs.map(|input| input.abs()).sum()
     }
 
-    /// Set the duration over which the control problem will be optimized
-    pub fn set_lookahead(&mut self, lookahead_duration: Duration) {
-        self.lookahead_duration = lookahead_duration;
-    }
-
-    /// Set the timestep of the controller.
-    /// The lookahead duration divided by the sample period (rounded up) gives the number of control inputs returned.
-    pub fn set_sample_period(&mut self, sample_period: Duration) {
-        self.sample_period = sample_period;
-    }
-
-    /// Set the target state of the controller.
-    /// Used only in user-defined cost and dynamics functions.
-    pub fn set_setpoint(&mut self, setpoint: [f64; STATE_SIZE]) {
-        self.setpoint = setpoint;
-    }
-
-    /// Set the current state of the controller.
-    pub fn set_current_state(&mut self, current_state: [f64; STATE_SIZE]) {
-        self.current_state = current_state;
-    }
-
-    /// This function provides a sample parameter vector for use with the Nelder-Mead optimizer.
-    pub fn parameter_vector(&self, max_input: f64) -> Vec<Array1<f64>> {
-        // TODO add warm start
-        let num_steps = (self.lookahead_duration.as_secs_f64() / self.sample_period.as_secs_f64())
-            .ceil() as usize;
-        let dimension = INPUT_SIZE * num_steps;
-
-        let mut simplex = Vec::with_capacity(dimension + 1);
-        let zero_vec = Array1::<f64>::zeros(dimension);
-        simplex.push(zero_vec.clone());
-
-        // have each simplex vector simply be a unit in a given direction
-        for i in 0..dimension {
-            let mut next_vec = zero_vec.clone();
-            next_vec[i] = max_input;
-            simplex.push(next_vec);
+    fn get_simple_problem(goal: Array1<f64>) -> MPCProblem {
+        MPCProblem {
+            setpoint: Arc::new(goal),
+            current_state: array![INITIAL_POS, INITIAL_VEL],
+            sample_period: Duration::from_secs_f64(DT),
+            lookahead_duration: Duration::from_secs_f64(LOOKAHEAD),
+            dynamics_function: DynamicsFunction::Continuous(Arc::new(&simple_continuous_dynamics)),
+            input_size: 1,
+            state_cost_function: Arc::new(&simple_state_cost_function),
+            dynamics_cost_function: Box::new(&simple_dynamics_cost_function),
         }
-        simplex
+    }
+    #[test]
+    fn test_trajectory_calculation() {
+        let input = -0.314159;
+        let mpc_problem = get_simple_problem(array![0., 0.]);
+        let trajectory = mpc_problem.calculate_trajectory(array![input].view());
+        let expected_endpoint = array![
+            INITIAL_POS + 0.5 * input * DT.powi(2),
+            INITIAL_VEL + input * DT
+        ];
+        assert!((trajectory.last().unwrap() - expected_endpoint).norm() < 1e-3);
     }
 
-    // wrap our cost function in a closure
-    fn cost_closure(&self) -> impl Fn(&Array1<f64>) -> Result<f64, argmin::core::Error> {
-        |x: &Array1<f64>| self.cost(x)
+    #[test]
+    fn test_trajectory_cost() {
+        let mpc_problem = get_simple_problem(array![INITIAL_POS, INITIAL_VEL]);
+        let cost = mpc_problem.cost(&array![0.]).unwrap();
+        assert_eq!(cost, 0.);
+
+        let mpc_problem = get_simple_problem(array![0., 0.]);
+        let cost = mpc_problem.cost(&array![0.]).unwrap();
+        assert_eq!(cost, 1.);
+    }
+
+    #[test]
+    fn test_optimization() {
+        let goal = array![0., 0.];
+        let mpc_problem = get_simple_problem(goal.clone());
+
+        let n_points = 10;
+        // this problem can be solved by hand
+        let optimal_inputs = Array1::from_iter((0..n_points).map(|subindex| {
+            if subindex < (n_points / 2) {
+                -0.04
+            } else {
+                0.04
+            }
+        }));
+
+        // this is chosen so that the optimal value isn't quite in the simplex (though it will contain 0.05 and 0.00)
+        let max_input = 0.5;
+
+        let simplex = Vec::from_iter((0..(n_points + 1)).map(|index| {
+            // make the param vec a bang-bang input scaled by the max value
+            let max_value = max_input * (index as f64) / (n_points as f64);
+            Array1::from_iter((0..n_points).map(|subindex| {
+                if subindex < (n_points / 2) {
+                    -max_value
+                } else {
+                    max_value
+                }
+            }))
+        }));
+        let solver = NelderMead::new(simplex);
+        let res = Executor::new(mpc_problem, solver)
+            .configure(|state| state.max_iters(1000))
+            .run()
+            .unwrap();
+        let optimized_inputs = res.state.best_param.unwrap();
+        let mpc_problem = get_simple_problem(goal.clone());
+        let trajectory = mpc_problem.calculate_trajectory(optimized_inputs.view());
+        let last_state = trajectory.last().unwrap();
+
+        assert!((goal - last_state).norm() < 1e-5);
+        assert!((optimized_inputs - optimal_inputs).norm() < 1e-5);
     }
 }
