@@ -31,6 +31,7 @@ pub struct DynamicsOptimizer {
     orphans: Vec<NodeId>,
 
     state_cost_epsilon: f64,
+    // WIP: add BTreeSet of node IDs sorted based on cost to avoid recomputing leaf costs every add or prune call
 }
 
 impl DynamicsOptimizer {
