@@ -490,7 +490,7 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
 
         let action = if (self.dynamics_tree.nodes().count() - self.orphans.len()) < self.target_size
         {
-            if self.grow_nodes(1) {
+            if self.grow_nodes(10) {
                 TreeOptimizationAction::Grow
             } else {
                 TreeOptimizationAction::Prune
