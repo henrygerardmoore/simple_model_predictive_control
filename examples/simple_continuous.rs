@@ -16,11 +16,11 @@ const STATE_SIZE: usize = 4;
 // const INPUT_SIZE: usize = 2;
 
 // timestep
-const DT: f64 = 0.1;
+const DT: f64 = 0.5;
 
-const LOOKAHEAD: f64 = 1.0;
+const LOOKAHEAD: f64 = 5.;
 
-const GOAL: [f64; STATE_SIZE] = [1., 1., 0., 0.];
+const GOAL: [f64; STATE_SIZE] = [1., 0., 1., 0.];
 
 // simple dynamics, frictionless plane where the input applies a force
 fn dynamics_function(state: &Array1<f64>, input: ArrayView1<f64>) -> Array1<f64> {
@@ -64,7 +64,7 @@ fn get_mpc_problem(
         Box::new(simple_dynamics_cost_function),
     );
     let dynamics_optimizer =
-        DynamicsOptimizer::new(array![-1., -1.], array![0., 0.], &mpc_problem, 1e-3);
+        DynamicsOptimizer::new(array![-1., -1.], array![1., 1.], &mpc_problem, 1e-3);
     (mpc_problem, dynamics_optimizer)
 }
 
@@ -127,7 +127,7 @@ fn plot_tree(tree_segments: Vec<([f64; 2], [f64; 2])>) -> Result<(), Box<dyn std
         });
 
     let x_extent = x_extent.max(GOAL[0] + 0.01);
-    let y_extent = y_extent.max(GOAL[1] + 0.01);
+    let y_extent = y_extent.max(GOAL[2] + 0.01);
     let mut chart = ChartBuilder::on(&root)
         .caption("MPC Tree", ("sans-serif", 50))
         .margin(5)
@@ -154,7 +154,7 @@ fn plot_tree(tree_segments: Vec<([f64; 2], [f64; 2])>) -> Result<(), Box<dyn std
         .draw()?;
 
     chart.draw_series(std::iter::once(Circle::new(
-        (GOAL[0], GOAL[1]),
+        (GOAL[0], GOAL[2]),
         5,
         GREEN.filled(),
     )))?;

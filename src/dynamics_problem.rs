@@ -76,7 +76,7 @@ pub struct DynamicsProblem {
 impl DynamicsProblem {
     // just for plotting example, only works for 2D
     pub fn get_2d_state_array(&self) -> [f64; 2] {
-        [self.state[0], self.state[1]]
+        [self.state[0], self.state[2]]
     }
 }
 

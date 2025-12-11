@@ -221,9 +221,8 @@ impl DynamicsOptimizer {
             4,
         )
         .map(|(cost, dynamics_problem, inputs)| {
-            let id = self.add_node(dynamics_problem.clone(), inputs, cost);
+            let id = self.add_node(dynamics_problem, inputs, cost);
             if cost < self.state_cost_epsilon {
-                println!("Solution found at {}", dynamics_problem.state);
                 self.solution_nodes.push(id);
             }
             id
