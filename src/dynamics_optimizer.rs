@@ -933,7 +933,7 @@ mod bench {
         #[cfg(debug_assertions)]
         let num_iterations = 10;
         #[cfg(not(debug_assertions))]
-        let num_iterations = 10000;
+        let num_iterations = 100000;
 
         let (_, dynamics_optimizer) = get_simple_optimizer(goal.clone());
         let root_id = dynamics_optimizer.dynamics_tree.root().id();
