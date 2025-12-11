@@ -19,5 +19,5 @@ finitediff = {version="0.2.0", features = ["ndarray"]}
 log = "0.4.28"
 ndarray = {version = "0.16", features = ["rayon", "serde"]}
 ndarray-linalg = { version = "0.17", features = ["intel-mkl-static"] }
+ndarray-rand = "0.15.0"
 plotters = "0.3.7"
-rand = "0.9.2"

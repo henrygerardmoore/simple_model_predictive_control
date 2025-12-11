@@ -5,16 +5,24 @@ use std::{
 };
 
 use argmin::{
-    core::{Error, Executor, IterState, KV, Problem, Solver, TerminationReason, TerminationStatus},
+    core::{
+        CostFunction, Error, Executor, IterState, KV, Problem, Solver, TerminationReason,
+        TerminationStatus,
+    },
     kv,
-    solver::{neldermead::NelderMead, particleswarm::ParticleSwarm},
+    solver::neldermead::NelderMead,
 };
 use ego_tree::{NodeId, NodeRef, Tree};
+use ndarray::{Array, Axis, parallel::prelude::IntoParallelIterator};
 use ndarray::{
     Array1,
     parallel::prelude::{IntoParallelRefIterator, ParallelIterator},
 };
-use rand::distr::{Distribution, weighted::WeightedIndex};
+use ndarray_rand::RandomExt;
+use ndarray_rand::{
+    rand,
+    rand_distr::{Distribution, Uniform, WeightedIndex},
+};
 
 use crate::{dynamics_problem::DynamicsProblem, prelude::MPCProblem};
 
@@ -91,6 +99,12 @@ pub struct DynamicsOptimizer {
     leaves: BTreeSet<NodeIDAndCost>,
 }
 
+#[derive(Clone)]
+struct Particle {
+    state: Array1<f64>,
+    cost: f64,
+}
+
 impl DynamicsOptimizer {
     pub fn new(
         input_min: Array1<f64>,
@@ -103,7 +117,7 @@ impl DynamicsOptimizer {
         .ceil() as usize;
         let input_size = mpc_problem.input_size;
 
-        let target_size = max_depth * input_size * 5;
+        let target_size = max_depth * input_size * 1000;
 
         let root_dynamics = DynamicsProblem {
             dynamics_function: mpc_problem.dynamics_function.clone(),
@@ -240,7 +254,7 @@ impl DynamicsOptimizer {
         };
 
         let best_leaf_ids: Vec<NodeId> = (0..num_nodes)
-            .map(|_| ids[dist.sample(&mut rand::rng())])
+            .map(|_| ids[dist.sample(&mut rand::thread_rng())])
             .collect();
 
         self.grow_node_ids(best_leaf_ids);
@@ -293,6 +307,31 @@ impl DynamicsOptimizer {
         });
     }
 
+    fn particle_sample(
+        minima: Array1<f64>,
+        maxima: Array1<f64>,
+        num_particles: usize,
+        dynamics: &DynamicsProblem,
+    ) -> Vec<Particle> {
+        assert_eq!(minima.len(), maxima.len());
+        let dimension = minima.len();
+        let uniform_dist = Uniform::new(0., 1.);
+        let unit_randoms = Array::random((num_particles, dimension), uniform_dist);
+
+        let ranges = &maxima - &minima;
+        let samples = &unit_randoms * &ranges + &minima;
+
+        samples
+            .axis_iter(Axis(0))
+            .into_par_iter()
+            .map(|row| {
+                let state = row.to_owned();
+                let cost = dynamics.cost(&state).unwrap();
+                Particle { state, cost }
+            })
+            .collect()
+    }
+
     /// the most important function in the DynamicsOptimizer
     /// *must* connect to the goal if it is possible
     fn generate_children(
@@ -301,16 +340,13 @@ impl DynamicsOptimizer {
         epsilon: f64,
         branch_factor: usize,
     ) -> impl Iterator<Item = (f64, DynamicsProblem, Array1<f64>)> {
-        // TODO use manual random sampling instead of particle swarm
-        let solver = ParticleSwarm::new((input_min_max.0.clone(), input_min_max.1.clone()), 500);
-
-        let res = Executor::new(parent_dynamics.clone(), solver)
-            .configure(|state| state.max_iters(1).target_cost(epsilon))
-            .run()
-            .unwrap();
-
-        // now importance sample to get the other `branch_factor - 1` inputs
-        let population = res.state.population.unwrap();
+        // importance sample to get `branch_factor - 1` inputs
+        let population = Self::particle_sample(
+            input_min_max.0.clone(),
+            input_min_max.1.clone(),
+            2000,
+            &parent_dynamics,
+        );
         let dist = WeightedIndex::new(population.iter().map(|particle| {
             let particle_weight = particle.cost.recip();
             if particle_weight.is_finite() {
@@ -325,7 +361,11 @@ impl DynamicsOptimizer {
         // Nelder-Mead optimization
         let num_inputs = input_min_max.0.len();
         let importance_sample_simplex: Vec<Array1<f64>> = (0..(num_inputs + 1))
-            .map(|_| population[dist.sample(&mut rand::rng())].position.clone())
+            .map(|_| {
+                population[dist.sample(&mut rand::thread_rng())]
+                    .state
+                    .clone()
+            })
             .collect();
         let nm_solver = NelderMead::new(importance_sample_simplex);
 
@@ -336,8 +376,11 @@ impl DynamicsOptimizer {
 
         let nm_optimized_inputs = res.state.best_param.unwrap();
 
-        let importance_sample_iter = (0..(branch_factor - 1))
-            .map(move |_| population[dist.sample(&mut rand::rng())].position.clone());
+        let importance_sample_iter = (0..(branch_factor - 1)).map(move |_| {
+            population[dist.sample(&mut rand::thread_rng())]
+                .state
+                .clone()
+        });
 
         let inputs_iter = once(nm_optimized_inputs).chain(importance_sample_iter);
 
@@ -654,7 +697,7 @@ mod test {
         let goal = array![0., 0.];
         let (mpc_problem, dynamics_optimizer) = get_simple_optimizer(goal.clone());
         let res = Executor::new(mpc_problem, dynamics_optimizer)
-            .configure(|state| state.max_iters(10000).target_cost(1e-4))
+            .configure(|state| state.max_iters(10000).target_cost(1e-5))
             .run()
             .unwrap();
 
@@ -766,7 +809,7 @@ mod bench {
         #[cfg(debug_assertions)]
         let num_iterations = 10;
         #[cfg(not(debug_assertions))]
-        let num_iterations = 1000;
+        let num_iterations = 10000;
 
         let (_, dynamics_optimizer) = get_simple_optimizer(goal.clone());
         let dynamics_optimizer = RefCell::new(dynamics_optimizer);
