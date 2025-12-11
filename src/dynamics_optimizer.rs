@@ -593,9 +593,8 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
             }
             self.termination_reason = Some(TerminationReason::Timeout);
         }
-        if !self.solutions.is_empty() {
-            self.termination_reason = Some(TerminationReason::SolverConverged);
-        }
+
+        // TODO: return early if solution reaches max lookahead
 
         let best_state_cost = self.leaves.first().unwrap().1;
         Ok((

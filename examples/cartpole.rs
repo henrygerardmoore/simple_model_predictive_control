@@ -149,7 +149,7 @@ fn get_mpc_problem(
         &mpc_problem,
         1e-2,
         DynamicsOptimizerSettings {
-            time_limit: Some(Duration::from_secs_f32(0.03)),
+            time_limit: Some(Duration::from_secs_f32(0.01)),
             ..Default::default()
         },
     );
