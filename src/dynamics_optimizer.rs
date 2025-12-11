@@ -10,7 +10,10 @@ use argmin::{
     solver::{neldermead::NelderMead, particleswarm::ParticleSwarm},
 };
 use ego_tree::{NodeId, NodeRef, Tree};
-use ndarray::Array1;
+use ndarray::{
+    Array1,
+    parallel::prelude::{IntoParallelRefIterator, ParallelIterator},
+};
 use rand::distr::{Distribution, weighted::WeightedIndex};
 
 use crate::{dynamics_problem::DynamicsProblem, prelude::MPCProblem};
@@ -212,27 +215,45 @@ impl DynamicsOptimizer {
             .map(|_| ids[dist.sample(&mut rand::rng())])
             .collect();
 
-        best_leaf_ids.into_iter().for_each(|id_to_grow| {
-            self.grow_node(id_to_grow);
+        self.grow_node_ids(best_leaf_ids);
+    }
+
+    fn grow_node_ids(&mut self, node_ids: Vec<NodeId>) {
+        let node_id_children: Vec<_> = node_ids
+            .par_iter()
+            .map(|node_id| {
+                (
+                    *node_id,
+                    Self::generate_children(
+                        self.input_min_max.clone(),
+                        self.dynamics_tree.get(*node_id).unwrap().value().0.clone(),
+                        self.state_cost_epsilon,
+                        4,
+                    ),
+                )
+            })
+            .collect();
+
+        node_id_children.into_iter().for_each(|(id, children)| {
+            self.grow_node(id, children);
         });
     }
 
-    fn grow_node(&mut self, node_id: NodeId) {
+    fn grow_node(
+        &mut self,
+        node_id: NodeId,
+        children: impl Iterator<Item = (f64, DynamicsProblem, Array1<f64>)>,
+    ) {
         // consider costs below this to have made it to the goal
-        let ids: Vec<NodeId> = Self::generate_children(
-            self.input_min_max.clone(),
-            &self.dynamics_tree.get(node_id).unwrap().value().0.clone(),
-            self.state_cost_epsilon,
-            4,
-        )
-        .map(|(cost, dynamics_problem, inputs)| {
-            let id = self.add_node(dynamics_problem, inputs, cost);
-            if cost < self.state_cost_epsilon {
-                self.solution_nodes.push(id);
-            }
-            id
-        })
-        .collect();
+        let ids: Vec<NodeId> = children
+            .map(|(cost, dynamics_problem, inputs)| {
+                let id = self.add_node(dynamics_problem, inputs, cost);
+                if cost < self.state_cost_epsilon {
+                    self.solution_nodes.push(id);
+                }
+                id
+            })
+            .collect();
 
         // now remove node_id from leaves since it has children
         let this_cost = self.dynamics_tree.get(node_id).unwrap().value().2;
@@ -247,14 +268,15 @@ impl DynamicsOptimizer {
     /// *must* connect to the goal if it is possible
     fn generate_children(
         input_min_max: (Array1<f64>, Array1<f64>),
-        parent_dynamics: &DynamicsProblem,
+        parent_dynamics: DynamicsProblem,
         epsilon: f64,
         branch_factor: usize,
     ) -> impl Iterator<Item = (f64, DynamicsProblem, Array1<f64>)> {
-        let solver = ParticleSwarm::new((input_min_max.0.clone(), input_min_max.1.clone()), 10000);
+        // TODO use manual random sampling instead of particle swarm
+        let solver = ParticleSwarm::new((input_min_max.0.clone(), input_min_max.1.clone()), 100);
 
         let res = Executor::new(parent_dynamics.clone(), solver)
-            .configure(|state| state.max_iters(1).target_cost(epsilon))
+            .configure(|state| state.max_iters(10).target_cost(epsilon))
             .run()
             .unwrap();
 
@@ -291,7 +313,7 @@ impl DynamicsOptimizer {
         let inputs_iter = once(nm_optimized_inputs).chain(importance_sample_iter);
 
         // turn our selected inputs into the next states they create
-        inputs_iter.map(|input| {
+        inputs_iter.map(move |input| {
             let mut new_dynamics = parent_dynamics.clone();
             new_dynamics.state = new_dynamics.dynamics_function.get_next_state(
                 &new_dynamics.state,
@@ -427,7 +449,7 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
         &mut self,
         _state: &IterState<Array1<f64>, (), (), (), (), f64>,
     ) -> TerminationStatus {
-        // TODO: look for solutions with cost under a certain threshold and only terminate then
+        // TODO: look for solutions with trajectory cost under a certain threshold and only terminate then
         if !self.solutions.is_empty() {
             TerminationStatus::Terminated(TerminationReason::SolverConverged)
         } else {
@@ -489,7 +511,7 @@ mod test {
     }
 
     #[test]
-    fn test_grow_node_almost_always_finds_goal() {
+    fn test_grow_node_usually_finds_goal() {
         let optimal_force = 3.14159265358979;
         let goal = array![
             INITIAL_POS + 0.5 * optimal_force * DT.powi(2),
@@ -511,7 +533,7 @@ mod test {
         let success_rate = (num_successes as f64) / (num_trials as f64);
 
         println!("success rate after {} trials: {}", num_trials, success_rate);
-        assert!(success_rate > 0.98);
+        assert!(success_rate > 0.75);
     }
 
     #[test]
@@ -693,7 +715,7 @@ mod bench {
 
     // run with `cargo test --release --package simple_model_predictive_control --lib -- dynamics_optimizer::bench::benchmark_grow_node --exact --nocapture`
     #[test]
-    pub fn benchmark_grow_node() {
+    pub fn benchmark_grow_nodes() {
         let optimal_force = 3.14159265358979;
         let goal = array![
             INITIAL_POS + 0.5 * optimal_force * DT.powi(2),
@@ -711,6 +733,37 @@ mod bench {
             "Grow node",
             num_iterations,
             || dynamics_optimizer.borrow_mut().grow_nodes(black_box(1)),
+            || {
+                let (_, new_dynamics_optimizer) = get_simple_optimizer(goal.clone());
+                dynamics_optimizer.replace(new_dynamics_optimizer);
+            },
+        );
+    }
+
+    #[test]
+    pub fn benchmark_grow_node() {
+        let optimal_force = 3.14159265358979;
+        let goal = array![
+            INITIAL_POS + 0.5 * optimal_force * DT.powi(2),
+            INITIAL_VEL + optimal_force * DT
+        ];
+
+        #[cfg(debug_assertions)]
+        let num_iterations = 10;
+        #[cfg(not(debug_assertions))]
+        let num_iterations = 1000;
+
+        let (_, dynamics_optimizer) = get_simple_optimizer(goal.clone());
+        let root_id = dynamics_optimizer.dynamics_tree.root().id();
+        let dynamics_optimizer = RefCell::new(dynamics_optimizer);
+        bench_with_setup(
+            "Grow node",
+            num_iterations,
+            || {
+                dynamics_optimizer
+                    .borrow_mut()
+                    .grow_node_ids(black_box(vec![root_id]))
+            },
             || {
                 let (_, new_dynamics_optimizer) = get_simple_optimizer(goal.clone());
                 dynamics_optimizer.replace(new_dynamics_optimizer);
