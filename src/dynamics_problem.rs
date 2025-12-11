@@ -1,7 +1,7 @@
 use core::f64;
 use std::{sync::Arc, time::Duration};
 
-use argmin::core::{CostFunction, Hessian, Jacobian};
+use argmin::core::{Hessian, Jacobian};
 use finitediff::ndarr;
 use ndarray::{
     Array1, Array2, ArrayView1,
@@ -37,6 +37,9 @@ impl DynamicsFunction {
     }
 }
 
+/// f(state, setpoint) -> cost
+pub type StateCostFunction = dyn Fn(&Array1<f64>, &Array1<f64>) -> f64 + Send + Sync;
+
 /// f(state, input, setpoint) -> cost
 pub type DynamicsCostFunction =
     dyn Fn(&Array1<f64>, ArrayView1<f64>, &Array1<f64>) -> f64 + Send + Sync;
@@ -45,8 +48,8 @@ pub type DynamicsCostFunction =
 pub struct DynamicsProblem {
     pub dynamics_function: DynamicsFunction,
 
-    /// f(state, input, setpoint) -> cost
-    pub dynamics_cost_function: Arc<DynamicsCostFunction>,
+    /// f(state, setpoint) -> cost
+    pub state_cost_function: Arc<StateCostFunction>,
     pub state: Array1<f64>,
     pub set_point: Arc<Array1<f64>>,
     pub dt: Duration,
@@ -105,31 +108,5 @@ impl Hessian for DynamicsProblem {
             .par_iter()
             .map(|p| self.hessian(p.borrow()))
             .collect()
-    }
-}
-
-impl CostFunction for DynamicsProblem {
-    type Param = Array1<f64>;
-
-    type Output = f64;
-
-    fn cost(&self, param: &Self::Param) -> Result<Self::Output, argmin_math::Error> {
-        let next_state = self
-            .dynamics_function
-            .get_next_state(&self.state, param.view(), self.dt);
-        Ok((self.dynamics_cost_function)(
-            &next_state,
-            param.view(),
-            &self.set_point,
-        ))
-    }
-
-    fn bulk_cost<P>(&self, params: &[P]) -> Result<Vec<Self::Output>, argmin_math::Error>
-    where
-        P: std::borrow::Borrow<Self::Param> + argmin::core::SyncAlias,
-        Self::Output: argmin::core::SendAlias,
-        Self: argmin::core::SyncAlias,
-    {
-        params.par_iter().map(|p| self.cost(p.borrow())).collect()
     }
 }

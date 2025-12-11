@@ -7,7 +7,9 @@ use ndarray::{
     parallel::prelude::{IntoParallelRefIterator, ParallelIterator},
 };
 
-use crate::dynamics_problem::{DynamicsCostFunction, DynamicsFunction, DynamicsProblem};
+use crate::dynamics_problem::{
+    DynamicsCostFunction, DynamicsFunction, DynamicsProblem, StateCostFunction,
+};
 
 /// Trait indicating that an argmin problem has a dynamics subproblem, used in DynamicsOptimizer Solver
 pub trait DynamicsSubProblem {
@@ -25,14 +27,15 @@ pub struct MPCProblem {
 
     pub(crate) input_size: usize,
 
-    pub(crate) dynamics_cost_function: Arc<DynamicsCostFunction>,
+    pub(crate) state_cost_function: Arc<StateCostFunction>,
+    pub(crate) dynamics_cost_function: Box<DynamicsCostFunction>,
 }
 
 impl DynamicsSubProblem for MPCProblem {
     fn get_dynamics(&self, state: Array1<f64>) -> DynamicsProblem {
         DynamicsProblem {
             dynamics_function: self.dynamics_function.clone(),
-            dynamics_cost_function: self.dynamics_cost_function.clone(),
+            state_cost_function: self.state_cost_function.clone(),
             state,
             set_point: self.setpoint.clone(),
             dt: self.sample_period,
