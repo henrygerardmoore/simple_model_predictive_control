@@ -889,7 +889,7 @@ mod bench {
         avg
     }
 
-    // run with `cargo test --release --package simple_model_predictive_control --lib -- dynamics_optimizer::bench::benchmark_grow_node --exact --nocapture`
+    // run with `cargo test --release --package simple_model_predictive_control --lib -- dynamics_optimizer::bench::benchmark_grow_nodes --exact --nocapture`
     #[test]
     pub fn benchmark_grow_nodes() {
         let optimal_force = 3.14159265358979;
@@ -901,23 +901,30 @@ mod bench {
         #[cfg(debug_assertions)]
         let num_iterations = 10;
         #[cfg(not(debug_assertions))]
-        let num_iterations = 100000;
+        let num_iterations = 1000;
 
         let (_, dynamics_optimizer) = get_simple_optimizer(goal.clone());
         let dynamics_optimizer = RefCell::new(dynamics_optimizer);
+
         bench_with_setup(
-            "Grow node",
+            "Grow nodes",
             num_iterations,
             || {
-                dynamics_optimizer.borrow_mut().grow_nodes(black_box(1));
+                dynamics_optimizer.borrow_mut().grow_nodes(black_box(10));
             },
             || {
-                let (_, new_dynamics_optimizer) = get_simple_optimizer(goal.clone());
+                let (_, mut new_dynamics_optimizer) = get_simple_optimizer(goal.clone());
+                for _ in 0..50 {
+                    new_dynamics_optimizer.grow_nodes(10);
+                }
+                // prune a little to have orphans
+                new_dynamics_optimizer.prune_nodes(20);
                 dynamics_optimizer.replace(new_dynamics_optimizer);
             },
         );
     }
 
+    // run with `cargo test --release --package simple_model_predictive_control --lib -- dynamics_optimizer::bench::benchmark_grow_node --exact --nocapture`
     #[test]
     pub fn benchmark_grow_node() {
         let optimal_force = 3.14159265358979;
