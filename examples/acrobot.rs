@@ -343,7 +343,7 @@ pub fn main() {
 
     let elapsed = now.elapsed();
     println!(
-        "MPC simulation of {:.1} seconds complete in {:.1} seconds, now plotting...",
+        "MPC simulation of {:.2} seconds complete in {:.2} seconds, now plotting...",
         LOOKAHEAD,
         elapsed.as_secs_f64()
     );
