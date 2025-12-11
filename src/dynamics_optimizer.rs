@@ -344,7 +344,7 @@ impl DynamicsOptimizer {
         let population = Self::particle_sample(
             input_min_max.0.clone(),
             input_min_max.1.clone(),
-            2000,
+            1000,
             &parent_dynamics,
         );
         let dist = WeightedIndex::new(population.iter().map(|particle| {
