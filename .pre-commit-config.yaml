@@ -44,7 +44,7 @@ repos:
       - id: cargo-test
         name: cargo test
         description: Run the package's test
-        entry: cargo test
+        entry: cargo test --release
         language: system
         types: [rust]
         pass_filenames: false

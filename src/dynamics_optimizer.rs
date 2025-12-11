@@ -7,7 +7,7 @@ use std::{
 use argmin::{
     core::{Error, Executor, IterState, KV, Problem, Solver, TerminationReason, TerminationStatus},
     kv,
-    solver::particleswarm::ParticleSwarm,
+    solver::{neldermead::NelderMead, particleswarm::ParticleSwarm},
 };
 use ego_tree::{NodeId, NodeRef, Tree};
 use ndarray::Array1;
@@ -190,20 +190,6 @@ impl DynamicsOptimizer {
 
     // find the `num_nodes` best leaves and add children to them
     fn grow_nodes(&mut self, num_nodes: usize) {
-        let mut leaves = self
-            .leaves()
-            .collect::<Vec<NodeRef<'_, DynamicsNodeType>>>();
-
-        leaves.sort_by(|n1, n2| {
-            let dynamics_1 = &n1.value().0;
-            let dynamics_2 = &n2.value().0;
-            let n1_state_cost =
-                (dynamics_1.state_cost_function)(&dynamics_1.state, &dynamics_1.set_point);
-            let n2_state_cost =
-                (dynamics_2.state_cost_function)(&dynamics_2.state, &dynamics_2.set_point);
-            n1_state_cost.total_cmp(&n2_state_cost)
-        });
-
         let best_leaf_ids: Vec<NodeId> = self
             .leaves
             .iter()
@@ -259,14 +245,12 @@ impl DynamicsOptimizer {
         epsilon: f64,
         branch_factor: usize,
     ) -> impl Iterator<Item = (f64, DynamicsProblem, Array1<f64>)> {
-        let solver = ParticleSwarm::new((input_min_max.0.clone(), input_min_max.1.clone()), 1000);
+        let solver = ParticleSwarm::new((input_min_max.0.clone(), input_min_max.1.clone()), 10000);
 
         let res = Executor::new(parent_dynamics.clone(), solver)
-            .configure(|state| state.max_iters(10).target_cost(epsilon))
+            .configure(|state| state.max_iters(1).target_cost(epsilon))
             .run()
             .unwrap();
-
-        let optimized_input = res.state.best_individual.unwrap().position;
 
         // now importance sample to get the other `branch_factor - 1` inputs
         let population = res.state.population.unwrap();
@@ -280,10 +264,25 @@ impl DynamicsOptimizer {
             }
         }))
         .unwrap();
+
+        // Nelder-Mead optimization
+        let num_inputs = input_min_max.0.len();
+        let importance_sample_simplex: Vec<Array1<f64>> = (0..(num_inputs + 1))
+            .map(|_| population[dist.sample(&mut rand::rng())].position.clone())
+            .collect();
+        let nm_solver = NelderMead::new(importance_sample_simplex);
+
+        let res = Executor::new(parent_dynamics.clone(), nm_solver)
+            .configure(|state| state.max_iters(1000).target_cost(epsilon))
+            .run()
+            .unwrap();
+
+        let nm_optimized_inputs = res.state.best_param.unwrap();
+
         let importance_sample_iter = (0..(branch_factor - 1))
             .map(move |_| population[dist.sample(&mut rand::rng())].position.clone());
 
-        let inputs_iter = once(optimized_input).chain(importance_sample_iter);
+        let inputs_iter = once(nm_optimized_inputs).chain(importance_sample_iter);
 
         // turn our selected inputs into the next states they create
         inputs_iter.map(|input| {
@@ -316,23 +315,12 @@ impl DynamicsOptimizer {
 
     // find the `num_nodes` worst leaves and prune them
     fn prune_nodes(&mut self, num_nodes: usize) {
-        let mut leaves = self
-            .leaves()
-            .collect::<Vec<NodeRef<'_, DynamicsNodeType>>>();
-
-        leaves.sort_by(|n1, n2| {
-            let dynamics_1 = &n1.value().0;
-            let dynamics_2 = &n2.value().0;
-            let n1_val = (dynamics_1.state_cost_function)(&dynamics_1.state, &dynamics_1.set_point);
-            let n2_val = (dynamics_2.state_cost_function)(&dynamics_2.state, &dynamics_2.set_point);
-            n1_val.total_cmp(&n2_val)
-        });
-
-        let ids_to_prune: Vec<NodeId> = leaves
-            .into_iter()
+        let ids_to_prune: Vec<NodeId> = self
+            .leaves
+            .iter()
             .rev()
             .take(num_nodes)
-            .map(|node_ref| node_ref.id())
+            .map(|node_ref| node_ref.0)
             .collect();
 
         ids_to_prune.into_iter().for_each(|id_to_prune| {
@@ -356,15 +344,6 @@ impl DynamicsOptimizer {
             self.leaves
                 .insert(NodeIDAndCost(parent_id, parent.value().2));
         }
-    }
-
-    fn leaves(&self) -> impl Iterator<Item = NodeRef<'_, DynamicsNodeType>> {
-        let root_id = self.dynamics_tree.root().id();
-        self.dynamics_tree
-            .nodes()
-            // filter out non-root orphans
-            .filter(move |node| node.id() == root_id || node.parent().is_some())
-            .filter(|node| !node.has_children())
     }
 }
 
@@ -408,7 +387,7 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
     ) -> Result<(IterState<Array1<f64>, (), (), (), (), f64>, Option<KV>), Error> {
         let mpc_problem = problem.problem.as_ref().unwrap();
 
-        let action = if self.leaves().count() < self.target_size {
+        let action = if self.leaves.len() < self.target_size {
             self.grow_nodes(10);
             TreeOptimizationAction::Grow
         } else {
@@ -503,18 +482,29 @@ mod test {
     }
 
     #[test]
-    fn test_grow_node_finds_goal() {
+    fn test_grow_node_almost_always_finds_goal() {
         let optimal_force = 3.14159265358979;
         let goal = array![
             INITIAL_POS + 0.5 * optimal_force * DT.powi(2),
             INITIAL_VEL + optimal_force * DT
         ];
-        let (mpc_problem, mut dynamics_optimizer) = get_simple_optimizer(goal);
-        dynamics_optimizer.grow_nodes(1);
-        dynamics_optimizer.calculate_and_sort_solutions(&mpc_problem);
 
-        // ensure that we found at least one solution
-        assert!(dynamics_optimizer.solutions.len() > 0);
+        // run many times to be sure
+        let num_trials = 1000;
+        let num_successes = (0..num_trials)
+            .map(|_| {
+                let (mpc_problem, mut dynamics_optimizer) = get_simple_optimizer(goal.clone());
+                dynamics_optimizer.grow_nodes(1);
+                dynamics_optimizer.calculate_and_sort_solutions(&mpc_problem);
+
+                // ensure that we found at least one solution
+                dynamics_optimizer.solutions.len() > 0
+            })
+            .fold(0, |acc, succeeded| if succeeded { acc + 1 } else { acc });
+        let success_rate = (num_successes as f64) / (num_trials as f64);
+
+        println!("success rate after {} trials: {}", num_trials, success_rate);
+        assert!(success_rate > 0.99);
     }
 
     #[test]
@@ -525,7 +515,7 @@ mod test {
             dynamics_optimizer.grow_nodes(10);
         }
 
-        let num_leaves = dynamics_optimizer.leaves().count();
+        let num_leaves = dynamics_optimizer.leaves.len();
         let size = dynamics_optimizer.dynamics_tree.nodes().count();
 
         dynamics_optimizer.prune_nodes(num_leaves);
