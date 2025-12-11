@@ -328,12 +328,6 @@ fn plot_tree(tree_segments: Vec<([f64; 2], [f64; 2])>) -> Result<(), Box<dyn std
         .build_cartesian_2d(-PI..PI, -PI..PI)
         .unwrap();
     chart.configure_mesh().draw()?;
-
-    chart.draw_series(std::iter::once(Circle::new(
-        (GOAL[0], GOAL[2]),
-        5,
-        GREEN.filled(),
-    )))?;
     for (point_1, point_2) in tree_segments {
         chart.draw_series(std::iter::once(Circle::new(
             (point_2[0], point_2[1]),
@@ -342,9 +336,15 @@ fn plot_tree(tree_segments: Vec<([f64; 2], [f64; 2])>) -> Result<(), Box<dyn std
         )))?;
         chart.draw_series(LineSeries::new(
             once((point_1[0], point_1[1])).chain(once((point_2[0], point_2[1]))),
-            ShapeStyle::from(&RED.mix(0.5)).stroke_width(1),
+            ShapeStyle::from(&RED.mix(0.1)).stroke_width(1),
         ))?;
     }
+
+    chart.draw_series(std::iter::once(Circle::new(
+        (GOAL[0], GOAL[2]),
+        5,
+        GREEN.filled(),
+    )))?;
 
     root.present()?;
     Ok(())
@@ -417,10 +417,10 @@ pub fn main() {
         let res = Executor::new(mpc_problem, solver).run().unwrap();
         let mut this_segments = res.solver.get_line_segments(0, 1);
         line_segments.append(&mut this_segments);
-        let optimized_inputs = res.state.best_param.unwrap();
+        let optimized_input = array![*res.state.best_param.unwrap().first().unwrap()];
 
         mpc_problem = res.problem.problem.unwrap();
-        let this_trajectory = mpc_problem.calculate_trajectory(optimized_inputs.view());
+        let this_trajectory = mpc_problem.calculate_trajectory(optimized_input.view());
         trajectory
             .append(ndarray::Axis(0), this_trajectory.view())
             .unwrap();
