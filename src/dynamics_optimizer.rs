@@ -122,6 +122,7 @@ pub struct DynamicsOptimizer {
 
     // TODO: try including all nodes in this, changing cost of node after it has had many children added to it
     leaves: BTreeSet<NodeIDAndCost>,
+    node_count: usize,
 
     // solver settings
     branching_factor: usize,
@@ -194,6 +195,7 @@ impl DynamicsOptimizer {
             iter_prune_number: settings.iter_prune_number,
             start_time: Instant::now(),
             time_limit: settings.time_limit,
+            node_count: 1,
         }
     }
 
@@ -480,6 +482,7 @@ impl DynamicsOptimizer {
 
     fn add_node(&mut self, dynamics: DynamicsProblem, inputs: Array1<f64>, cost: f64) -> NodeId {
         // either overwrite an orphan or add a new
+        self.node_count += 1;
         if let Some(node_id) = self.orphans.pop() {
             *self.dynamics_tree.get_mut(node_id).unwrap().value() = (dynamics, inputs, cost);
             self.leaves.insert(NodeIDAndCost(node_id, cost));
@@ -517,6 +520,7 @@ impl DynamicsOptimizer {
         self.leaves.remove(&NodeIDAndCost(node_id, node.value().2));
         node.detach();
         self.orphans.push(node_id);
+        self.node_count -= 1;
         let parent = self.dynamics_tree.get(parent_id).unwrap();
         if !parent.has_children() {
             // it's now a leaf, add it
@@ -566,8 +570,7 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
     ) -> Result<(IterState<Array1<f64>, (), (), (), (), f64>, Option<KV>), Error> {
         let mpc_problem = problem.problem.as_ref().unwrap();
 
-        let action = if (self.dynamics_tree.nodes().count() - self.orphans.len()) < self.target_size
-        {
+        let action = if (self.node_count - self.orphans.len()) < self.target_size {
             if self.grow_nodes(self.iter_grow_number) {
                 TreeOptimizationAction::Grow
             } else {
@@ -734,6 +737,8 @@ mod test {
             size - num_leaves
         );
 
+        assert_eq!(dynamics_optimizer.node_count, size - num_leaves,);
+
         // also check that all the previous leaves are now orphans
         assert_eq!(dynamics_optimizer.orphans.len(), num_leaves);
 
@@ -755,13 +760,7 @@ mod test {
         let target_count = 1000;
         while num_iter < max_iter && dynamics_optimizer.solution_nodes.len() == 0 {
             dynamics_optimizer.grow_nodes(3);
-            let count = dynamics_optimizer
-                .dynamics_tree
-                .nodes()
-                // filter out orphans that have no children (i.e. non-root orphans)
-                .filter(|node| node.parent().is_some() || node.has_children())
-                .count();
-            let num_to_prune = count as i32 - target_count as i32;
+            let num_to_prune = dynamics_optimizer.node_count as i32 - target_count as i32;
             if num_to_prune > 0 {
                 dynamics_optimizer.prune_nodes((num_to_prune + 5) as usize);
             }
