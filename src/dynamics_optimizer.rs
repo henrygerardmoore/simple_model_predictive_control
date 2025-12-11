@@ -87,7 +87,7 @@ impl DynamicsOptimizer {
         .ceil() as usize;
         let input_size = mpc_problem.input_size;
 
-        let target_size = max_depth * input_size * 100;
+        let target_size = max_depth * input_size * 1000;
 
         let root_dynamics = DynamicsProblem {
             dynamics_function: mpc_problem.dynamics_function.clone(),
@@ -194,7 +194,7 @@ impl DynamicsOptimizer {
     }
 
     // find `num_nodes` leaves via importance sampling and grow them
-    fn grow_nodes(&mut self, num_nodes: usize) {
+    fn grow_nodes(&mut self, num_nodes: usize) -> bool {
         let (ids, weights): (Vec<_>, Vec<_>) = self
             .leaves
             .iter()
@@ -202,20 +202,32 @@ impl DynamicsOptimizer {
                 let node_ref = self.dynamics_tree.get(id_and_cost.0).unwrap();
                 let depth = Self::depth(node_ref);
                 if depth < self.max_depth {
-                    Some((id_and_cost.0, id_and_cost.1))
+                    let weight = id_and_cost.1.recip();
+                    if weight.is_finite() {
+                        Some((id_and_cost.0, weight))
+                    } else {
+                        // if the cost is 0 or otherwise has a non-finite reciprocal then just make the weight huge
+                        Some((id_and_cost.0, 1e12))
+                    }
                 } else {
                     None
                 }
             })
             .unzip();
 
-        let dist = WeightedIndex::new(weights.iter()).unwrap();
+        // TODO: add option to terminate in this case
+        let Ok(dist) = WeightedIndex::new(weights.iter()) else {
+            // we are out of leaves of suitable depth
+            self.prune_nodes(num_nodes);
+            return false;
+        };
 
         let best_leaf_ids: Vec<NodeId> = (0..num_nodes)
             .map(|_| ids[dist.sample(&mut rand::rng())])
             .collect();
 
         self.grow_node_ids(best_leaf_ids);
+        true
     }
 
     fn grow_node_ids(&mut self, node_ids: Vec<NodeId>) {
@@ -416,8 +428,11 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
         let mpc_problem = problem.problem.as_ref().unwrap();
 
         let action = if self.leaves.len() < self.target_size {
-            self.grow_nodes(10);
-            TreeOptimizationAction::Grow
+            if self.grow_nodes(1) {
+                TreeOptimizationAction::Grow
+            } else {
+                TreeOptimizationAction::Prune
+            }
         } else {
             self.prune_nodes(10);
             TreeOptimizationAction::Prune
@@ -441,8 +456,13 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
                 state.best_param = Some(best_leaf_param);
             }
         }
-
-        Ok((state, Some(kv!("action" => format!("{action}");))))
+        let best_state_cost = self.leaves.first().unwrap().1;
+        Ok((
+            state,
+            Some(
+                kv!("action" => format!("{action}"); "best_state_cost" => format!("{best_state_cost}");),
+            ),
+        ))
     }
 
     fn terminate(
@@ -732,7 +752,9 @@ mod bench {
         bench_with_setup(
             "Grow node",
             num_iterations,
-            || dynamics_optimizer.borrow_mut().grow_nodes(black_box(1)),
+            || {
+                dynamics_optimizer.borrow_mut().grow_nodes(black_box(1));
+            },
             || {
                 let (_, new_dynamics_optimizer) = get_simple_optimizer(goal.clone());
                 dynamics_optimizer.replace(new_dynamics_optimizer);

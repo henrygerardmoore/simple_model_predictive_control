@@ -39,7 +39,7 @@ fn dynamics_function(state: &Array1<f64>, input: ArrayView1<f64>) -> Array1<f64>
 }
 
 fn state_cost(state: &Array1<f64>, setpoint: &Array1<f64>) -> f64 {
-    (state - setpoint).norm()
+    (state - setpoint).norm().powi(2)
 }
 
 fn simple_dynamics_cost_function(
@@ -65,7 +65,7 @@ fn get_mpc_problem(
         Box::new(simple_dynamics_cost_function),
     );
     let dynamics_optimizer =
-        DynamicsOptimizer::new(array![-1., -1.], array![1., 1.], &mpc_problem, 1e-3);
+        DynamicsOptimizer::new(array![-10., -10.], array![10., 10.], &mpc_problem, 1e-3);
     (mpc_problem, dynamics_optimizer)
 }
 
