@@ -1,9 +1,12 @@
-use std::fmt::{self, Display, Formatter};
+use std::{
+    fmt::{self, Display, Formatter},
+    iter::once,
+};
 
 use argmin::{
     core::{Error, Executor, IterState, KV, Problem, Solver, TerminationReason, TerminationStatus},
     kv,
-    solver::newton::Newton,
+    solver::{neldermead::NelderMead, newton::Newton},
 };
 use ego_tree::{NodeId, NodeRef, Tree};
 use ndarray::Array1;
@@ -118,24 +121,87 @@ impl DynamicsOptimizer {
         dynamics: &DynamicsProblem,
     ) -> impl Iterator<Item = DynamicsProblem> {
         // Set up solver
-        let solver: Newton<f64> = Newton::new();
+        let newton_solver: Newton<f64> = Newton::new();
 
         let middle_input = (input_min_max.0.clone() + input_min_max.1.clone()) / 2.;
         // Run solver
-        let res = Executor::new(dynamics.clone(), solver)
+        let res = Executor::new(dynamics.clone(), newton_solver)
             .configure(|state| state.param(middle_input.clone()).max_iters(10))
             .run()
             .unwrap();
         let newton_optimized_inputs = res.state.best_param.unwrap();
 
-        // TODO: use other optimizers to generate other children
+        let num_inputs = input_min_max.0.len();
+
+        // construct the n+1 points of the nelder-mead simplex, using the newton optimized answer as the +1
+        let one_min_simplex: Vec<Array1<f64>> = once(newton_optimized_inputs.clone())
+            .chain((0..num_inputs).map(|nonzero_index| {
+                Array1::from_iter((0..num_inputs).map(|index| {
+                    if index == nonzero_index {
+                        input_min_max.0[index]
+                    } else {
+                        0.
+                    }
+                }))
+            }))
+            .collect();
+        let one_max_simplex: Vec<Array1<f64>> = once(newton_optimized_inputs.clone())
+            .chain((0..num_inputs).map(|nonzero_index| {
+                Array1::from_iter((0..num_inputs).map(|index| {
+                    if index == nonzero_index {
+                        input_min_max.1[index]
+                    } else {
+                        0.
+                    }
+                }))
+            }))
+            .collect();
+        let most_min_simplex: Vec<Array1<f64>> = once(newton_optimized_inputs.clone())
+            .chain((0..num_inputs).map(|zero_index| {
+                Array1::from_iter((0..num_inputs).map(|index| {
+                    if index == zero_index {
+                        0.
+                    } else {
+                        input_min_max.0[index]
+                    }
+                }))
+            }))
+            .collect();
+        let most_max_simplex: Vec<Array1<f64>> = once(newton_optimized_inputs.clone())
+            .chain((0..num_inputs).map(|zero_index| {
+                Array1::from_iter((0..num_inputs).map(|index| {
+                    if index == zero_index {
+                        0.
+                    } else {
+                        input_min_max.1[index]
+                    }
+                }))
+            }))
+            .collect();
+
+        let [one_min, one_max, most_min, most_max] = [
+            one_min_simplex,
+            one_max_simplex,
+            most_min_simplex,
+            most_max_simplex,
+        ]
+        .map(|params| {
+            let nelder_mead_solver = NelderMead::new(params);
+
+            let res = Executor::new(dynamics.clone(), nelder_mead_solver)
+                .configure(|state| state.max_iters(100))
+                .run()
+                .unwrap();
+            res.state.best_param.unwrap()
+        });
 
         // turn our inputs into the next states they create
         [
-            input_min_max.0,
-            middle_input,
-            input_min_max.1,
             newton_optimized_inputs,
+            one_min,
+            one_max,
+            most_min,
+            most_max,
         ]
         .map(|input| {
             let mut new_dynamics = dynamics.clone();
