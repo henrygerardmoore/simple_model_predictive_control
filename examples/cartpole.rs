@@ -319,13 +319,14 @@ pub fn main() {
     let mut line_segments = vec![];
 
     let goal = Array1::from_iter(GOAL.into_iter());
-    let num_chunks = (5. / CONTROLLER_TIME_LIMIT).ceil() as usize;
+    let num_chunks = (1. / CONTROLLER_TIME_LIMIT).ceil() as usize;
     for _ in 0..num_chunks {
         let (mut mpc_problem, solver) = get_mpc_problem(initial_state, goal.clone());
         // Run solver
         let res = Executor::new(mpc_problem, solver).run().unwrap();
         let mut this_segments = res.solver.get_line_segments(0, 1);
         line_segments.append(&mut this_segments);
+        // only take the first input from the optimized trajectory
         let optimized_input = array![*res.state.best_param.unwrap().first().unwrap()];
 
         mpc_problem = res.problem.problem.unwrap();
@@ -338,8 +339,10 @@ pub fn main() {
 
     let elapsed = now.elapsed();
     println!(
-        "MPC simulation complete in {:.2} seconds, now plotting...",
-        elapsed.as_secs_f64()
+        "MPC simulation of {:.2} seconds complete in {:.2} seconds (controller dt={:.2}), now plotting...",
+        trajectory.len() as f64 * DT,
+        elapsed.as_secs_f64(),
+        CONTROLLER_TIME_LIMIT
     );
 
     #[cfg(feature = "profiling")]
