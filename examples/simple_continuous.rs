@@ -23,7 +23,7 @@ const DT: f64 = 0.1;
 
 const LOOKAHEAD: f64 = 1.0;
 
-const GOAL: [f64; 4] = [1., 0., 2., 0.];
+const GOAL: [f64; 4] = [1., 1., 0., 0.];
 
 // simple dynamics, frictionless plane where the input applies a force
 fn dynamics_function(state: &Array1<f64>, input: ArrayView1<f64>) -> Array1<f64> {
@@ -74,7 +74,7 @@ fn get_mpc_problem(
         Box::new(simple_dynamics_cost_function),
     );
     let dynamics_optimizer =
-        DynamicsOptimizer::new(array![-10., -10.], array![10., 10.], &mpc_problem, 1e-3);
+        DynamicsOptimizer::new(array![-1., -1.], array![0., 0.], &mpc_problem, 1e-3);
     (mpc_problem, dynamics_optimizer)
 }
 
@@ -135,21 +135,39 @@ fn plot_tree(tree_segments: Vec<([f64; 2], [f64; 2])>) {
                 acc.1.max(p1[1].abs()).max(p2[1].abs()),
             )
         });
+
+    let x_extent = x_extent.max(GOAL[0] + 0.01);
+    let y_extent = y_extent.max(GOAL[1] + 0.01);
     let mut chart = ChartBuilder::on(&root)
         .caption("MPC Tree", ("sans-serif", 50))
+        .margin(5)
+        .x_label_area_size(30)
+        .y_label_area_size(30)
         .build_cartesian_2d((-x_extent)..x_extent, (-y_extent)..y_extent)
         .unwrap();
+    chart.configure_mesh().draw();
     tree_segments.into_iter().for_each(|(point_1, point_2)| {
         chart.draw_series(std::iter::once(Circle::new(
             (point_2[0], point_2[1]),
             1,
-            GREEN.filled(),
+            BLUE.filled(),
         )));
         chart.draw_series(LineSeries::new(
             once((point_1[0], point_1[1])).chain(once((point_2[0], point_2[1]))),
             ShapeStyle::from(&RED.mix(0.5)).stroke_width(1),
         ));
     });
+    chart
+        .configure_series_labels()
+        .background_style(&WHITE.mix(0.8))
+        .border_style(&BLACK)
+        .draw();
+
+    chart.draw_series(std::iter::once(Circle::new(
+        (GOAL[0], GOAL[1]),
+        5,
+        GREEN.filled(),
+    )));
 
     root.present();
 }
