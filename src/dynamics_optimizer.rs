@@ -315,13 +315,14 @@ impl DynamicsOptimizer {
     }
 
     fn grow_node_ids(&mut self, node_ids: Vec<NodeId>) {
+        let input_min_max = self.input_min_max.clone();
         let node_id_children: Vec<_> = node_ids
             .par_iter()
             .map(|node_id| {
                 (
                     *node_id,
                     Self::generate_children(
-                        self.input_min_max.clone(),
+                        &input_min_max,
                         self.dynamics_tree.get(*node_id).unwrap().value().0.clone(),
                         self.state_cost_epsilon,
                         self.branching_factor,
@@ -390,7 +391,7 @@ impl DynamicsOptimizer {
     /// the most important function in the DynamicsOptimizer
     /// *must* connect to the goal if it is possible
     fn generate_children(
-        input_min_max: (Array1<f64>, Array1<f64>),
+        input_min_max: &(Array1<f64>, Array1<f64>),
         parent_dynamics: DynamicsProblem,
         epsilon: f64,
         branch_factor: usize,
