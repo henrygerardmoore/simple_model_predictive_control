@@ -27,6 +27,47 @@ pub struct DynamicsOptimizer {
 }
 
 impl DynamicsOptimizer {
+    pub fn new(input_min: f64, input_max: f64, mpc_problem: &MPCProblem) -> Self {
+        let max_depth = (mpc_problem.lookahead_duration.as_secs_f64()
+            / mpc_problem.sample_period.as_secs_f64())
+        .ceil() as usize;
+        let input_size = mpc_problem.input_size;
+
+        let target_size = max_depth * input_size * 1000;
+
+        let dynamics_tree = Tree::with_capacity(
+            DynamicsProblem {
+                dynamics_function: mpc_problem.dynamics_function.clone(),
+                state_cost_function: mpc_problem.state_cost_function.clone(),
+                state: mpc_problem.current_state.clone(),
+                set_point: mpc_problem.setpoint.clone(),
+                dt: mpc_problem.sample_period,
+            },
+            target_size * 2,
+        );
+
+        Self {
+            dynamics_tree,
+            max_depth,
+            solutions: vec![],
+            input_size: mpc_problem.input_size,
+            input_min_middle_max: (input_min, (input_min + input_max) / 2., input_max),
+            target_size,
+            orphans: vec![],
+        }
+    }
+
+    fn depth(mut node_ref: NodeRef<'_, DynamicsProblem>) -> usize {
+        let mut depth = 0;
+
+        while let Some(parent) = node_ref.parent() {
+            node_ref = parent;
+            depth += 1;
+        }
+
+        depth
+    }
+
     // find the `num_nodes` best leaves and add children to them
     fn grow_nodes(&mut self, num_nodes: usize) {
         let mut leaves = self.leaves().collect::<Vec<NodeRef<'_, DynamicsProblem>>>();
@@ -41,7 +82,14 @@ impl DynamicsOptimizer {
             .into_iter()
             .rev()
             .take(num_nodes)
-            .map(|node_ref| node_ref.id())
+            .filter_map(|node_ref| {
+                let depth = Self::depth(node_ref);
+                if depth < self.max_depth {
+                    Some(node_ref.id())
+                } else {
+                    None
+                }
+            })
             .collect();
 
         best_leaf_ids.into_iter().for_each(|id_to_grow| {
@@ -169,24 +217,7 @@ impl Solver<MPCProblem, IterState<Array1<f64>, (), (), (), (), f64>> for Dynamic
         problem: &mut Problem<MPCProblem>,
         state: IterState<Array1<f64>, (), (), (), (), f64>,
     ) -> Result<(IterState<Array1<f64>, (), (), (), (), f64>, Option<KV>), Error> {
-        let mpc_problem = problem.problem.as_ref().unwrap();
-        self.max_depth = (mpc_problem.lookahead_duration.as_secs_f64()
-            / mpc_problem.sample_period.as_secs_f64())
-        .ceil() as usize;
-        self.input_size = mpc_problem.input_size;
-
-        self.target_size = self.max_depth * self.input_size * 1000;
-
-        self.dynamics_tree = Tree::with_capacity(
-            DynamicsProblem {
-                dynamics_function: mpc_problem.dynamics_function.clone(),
-                state_cost_function: mpc_problem.state_cost_function.clone(),
-                state: mpc_problem.current_state.clone(),
-                set_point: mpc_problem.setpoint.clone(),
-                dt: mpc_problem.sample_period,
-            },
-            self.target_size * 2,
-        );
+        // we did our initialization of the solver in `new()`
 
         Ok((state, None))
     }
