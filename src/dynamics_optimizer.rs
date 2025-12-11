@@ -29,6 +29,8 @@ pub struct DynamicsOptimizer {
 
     // node IDs we can reuse instead of inserting
     orphans: Vec<NodeId>,
+
+    state_cost_epsilon: f64,
 }
 
 impl DynamicsOptimizer {
@@ -65,6 +67,7 @@ impl DynamicsOptimizer {
             target_size,
             orphans: vec![],
             solution_nodes: vec![],
+            state_cost_epsilon: 1e-5,
         }
     }
 
@@ -128,14 +131,15 @@ impl DynamicsOptimizer {
         leaves.sort_by(|n1, n2| {
             let dynamics_1 = &n1.value().0;
             let dynamics_2 = &n2.value().0;
-            let n1_val = (dynamics_1.state_cost_function)(&dynamics_1.state, &dynamics_1.set_point);
-            let n2_val = (dynamics_2.state_cost_function)(&dynamics_2.state, &dynamics_2.set_point);
-            n1_val.total_cmp(&n2_val)
+            let n1_state_cost =
+                (dynamics_1.state_cost_function)(&dynamics_1.state, &dynamics_1.set_point);
+            let n2_state_cost =
+                (dynamics_2.state_cost_function)(&dynamics_2.state, &dynamics_2.set_point);
+            n1_state_cost.total_cmp(&n2_state_cost)
         });
 
         let best_leaf_ids: Vec<NodeId> = leaves
             .into_iter()
-            .rev()
             .filter_map(|node_ref| {
                 let depth = Self::depth(node_ref);
                 if depth < self.max_depth {
@@ -147,6 +151,11 @@ impl DynamicsOptimizer {
             .take(num_nodes)
             .collect();
 
+        let best_leaf = &self.dynamics_tree.get(best_leaf_ids[0]).unwrap().value().0;
+        let best_cost = (best_leaf.state_cost_function)(&best_leaf.state, &best_leaf.set_point);
+
+        println!("Best leaf cost: {}", best_cost);
+
         best_leaf_ids.into_iter().for_each(|id_to_grow| {
             self.grow_node(id_to_grow);
         });
@@ -154,14 +163,14 @@ impl DynamicsOptimizer {
 
     fn grow_node(&mut self, node_id: NodeId) {
         // consider costs below this to have made it to the goal
-        let state_cost_epsilon = 1e-5;
         let ids: Vec<NodeId> = Self::generate_children(
             self.input_min_max.clone(),
             &self.dynamics_tree.get(node_id).unwrap().value().0.clone(),
+            self.state_cost_epsilon,
         )
         .map(|(cost, dynamics_problem, inputs)| {
             let id = self.add_node(dynamics_problem, inputs);
-            if cost < state_cost_epsilon {
+            if cost < self.state_cost_epsilon {
                 self.solution_nodes.push(id);
             }
             id
@@ -178,6 +187,7 @@ impl DynamicsOptimizer {
     fn generate_children(
         input_min_max: (Array1<f64>, Array1<f64>),
         parent_dynamics: &DynamicsProblem,
+        epsilon: f64,
     ) -> impl Iterator<Item = (f64, DynamicsProblem, Array1<f64>)> {
         // Set up solver
         let linesearch = HagerZhangLineSearch::new();
@@ -186,7 +196,12 @@ impl DynamicsOptimizer {
         let middle_input = (input_min_max.0.clone() + input_min_max.1.clone()) / 2.;
         // Run solver
         let res = Executor::new(parent_dynamics.clone(), initial_solver)
-            .configure(|state| state.param(middle_input.clone()).max_iters(10))
+            .configure(|state| {
+                state
+                    .param(middle_input.clone())
+                    .max_iters(10)
+                    .target_cost(epsilon)
+            })
             .run()
             .unwrap();
         let newton_optimized_inputs = res.state.best_param.unwrap();
@@ -205,47 +220,41 @@ impl DynamicsOptimizer {
                 }))
             }))
             .collect();
-        let one_max_simplex: Vec<Array1<f64>> = once(newton_optimized_inputs.clone())
-            .chain((0..num_inputs).map(|nonzero_index| {
-                Array1::from_iter((0..num_inputs).map(|index| {
-                    if index == nonzero_index {
-                        input_min_max.1[index]
-                    } else {
-                        0.
-                    }
-                }))
-            }))
-            .collect();
-        let most_min_simplex: Vec<Array1<f64>> = once(newton_optimized_inputs.clone())
-            .chain((0..num_inputs).map(|zero_index| {
-                Array1::from_iter((0..num_inputs).map(|index| {
-                    if index == zero_index {
-                        0.
-                    } else {
-                        input_min_max.0[index]
-                    }
-                }))
-            }))
-            .collect();
-        let most_max_simplex: Vec<Array1<f64>> = once(newton_optimized_inputs.clone())
-            .chain((0..num_inputs).map(|zero_index| {
-                Array1::from_iter((0..num_inputs).map(|index| {
-                    if index == zero_index {
-                        0.
-                    } else {
-                        input_min_max.1[index]
-                    }
-                }))
-            }))
-            .collect();
+        // let one_max_simplex: Vec<Array1<f64>> = once(newton_optimized_inputs.clone())
+        //     .chain((0..num_inputs).map(|nonzero_index| {
+        //         Array1::from_iter((0..num_inputs).map(|index| {
+        //             if index == nonzero_index {
+        //                 input_min_max.1[index]
+        //             } else {
+        //                 0.
+        //             }
+        //         }))
+        //     }))
+        //     .collect();
+        // let most_min_simplex: Vec<Array1<f64>> = once(newton_optimized_inputs.clone())
+        //     .chain((0..num_inputs).map(|zero_index| {
+        //         Array1::from_iter((0..num_inputs).map(|index| {
+        //             if index == zero_index {
+        //                 0.
+        //             } else {
+        //                 input_min_max.0[index]
+        //             }
+        //         }))
+        //     }))
+        //     .collect();
+        // let most_max_simplex: Vec<Array1<f64>> = once(newton_optimized_inputs.clone())
+        //     .chain((0..num_inputs).map(|zero_index| {
+        //         Array1::from_iter((0..num_inputs).map(|index| {
+        //             if index == zero_index {
+        //                 0.
+        //             } else {
+        //                 input_min_max.1[index]
+        //             }
+        //         }))
+        //     }))
+        //     .collect();
 
-        let [one_min, one_max, most_min, most_max] = [
-            one_min_simplex,
-            one_max_simplex,
-            most_min_simplex,
-            most_max_simplex,
-        ]
-        .map(|params| {
+        let [one_min] = [one_min_simplex].map(|params| {
             let nelder_mead_solver = NelderMead::new(params);
 
             let res = Executor::new(parent_dynamics.clone(), nelder_mead_solver)
@@ -256,27 +265,28 @@ impl DynamicsOptimizer {
         });
 
         // turn our inputs into the next states they create
-        [
-            newton_optimized_inputs,
-            one_min,
-            one_max,
-            most_min,
-            most_max,
-        ]
-        .map(|input| {
-            let mut new_dynamics = parent_dynamics.clone();
-            new_dynamics.state = new_dynamics.dynamics_function.get_next_state(
-                &new_dynamics.state,
-                input.view(),
-                new_dynamics.dt,
-            );
-            (
-                (new_dynamics.state_cost_function)(&new_dynamics.state, &new_dynamics.set_point),
-                new_dynamics,
-                input.clone(),
-            )
-        })
-        .into_iter()
+        let mut next_states =
+            [one_min, input_min_max.0, input_min_max.1, middle_input].map(|input| {
+                let mut new_dynamics = parent_dynamics.clone();
+                new_dynamics.state = new_dynamics.dynamics_function.get_next_state(
+                    &new_dynamics.state,
+                    input.view(),
+                    new_dynamics.dt,
+                );
+                (
+                    (new_dynamics.state_cost_function)(
+                        &new_dynamics.state,
+                        &new_dynamics.set_point,
+                    ),
+                    new_dynamics,
+                    input.clone(),
+                )
+            });
+
+        let branch_factor = 4;
+        // return the `branch_factor` lowest-cost children
+        next_states.sort_by(|(cost1, _, _), (cost2, _, _)| cost1.total_cmp(cost2));
+        next_states.into_iter().take(branch_factor)
     }
 
     fn add_node(&mut self, dynamics: DynamicsProblem, inputs: Array1<f64>) -> NodeId {
@@ -305,9 +315,15 @@ impl DynamicsOptimizer {
 
         let ids_to_prune: Vec<NodeId> = leaves
             .into_iter()
+            .rev()
             .take(num_nodes)
             .map(|node_ref| node_ref.id())
             .collect();
+
+        let worst_leaf = &self.dynamics_tree.get(ids_to_prune[0]).unwrap().value().0;
+        let worst_cost = (worst_leaf.state_cost_function)(&worst_leaf.state, &worst_leaf.set_point);
+
+        println!("Pruning worst leaf of cost: {}", worst_cost);
 
         ids_to_prune.into_iter().for_each(|id_to_prune| {
             self.prune_node(id_to_prune);
@@ -320,8 +336,11 @@ impl DynamicsOptimizer {
     }
 
     fn leaves(&self) -> impl Iterator<Item = NodeRef<'_, DynamicsNodeType>> {
+        let root_id = self.dynamics_tree.root().id();
         self.dynamics_tree
             .nodes()
+            // filter out non-root orphans
+            .filter(move |node| node.id() == root_id || node.parent().is_some())
             .filter(|node| !node.has_children())
     }
 }
@@ -404,7 +423,7 @@ mod test {
     };
 
     const DT: f64 = 0.1;
-    const LOOKAHEAD: f64 = 1.0;
+    const LOOKAHEAD: f64 = 500.0;
     const INITIAL_POS: f64 = 1.0;
     const INITIAL_VEL: f64 = 0.0;
 
@@ -455,6 +474,8 @@ mod test {
         let (mpc_problem, mut dynamics_optimizer) = get_simple_optimizer(goal);
         dynamics_optimizer.grow_nodes(1);
         dynamics_optimizer.calculate_solutions(&mpc_problem);
+
+        // ensure that we found at least one solution
         assert!(dynamics_optimizer.solutions.len() > 0);
     }
 
@@ -485,9 +506,57 @@ mod test {
         // also check that all the previous leaves are now orphans
         assert_eq!(dynamics_optimizer.orphans.len(), num_leaves);
 
-        // now check that we properly reuse orphans by growing by at least the number of orphans
-        dynamics_optimizer.grow_nodes(num_leaves);
+        // now grow num_leaves times to ensure we don't have any more orphans left
+        // growing by num_leaves once could be limited by how many leaves we have currently
+        for _ in 0..num_leaves {
+            dynamics_optimizer.grow_nodes(1);
+        }
 
         assert_eq!(dynamics_optimizer.orphans.len(), 0);
+    }
+
+    #[test]
+    fn test_find_goal_moderate() {
+        let goal = array![0., 0.];
+        let (mpc_problem, mut dynamics_optimizer) = get_simple_optimizer(goal.clone());
+        let mut num_iter = 0;
+        let max_iter = 10000;
+        let target_count = 1000;
+        while num_iter < max_iter && dynamics_optimizer.solution_nodes.len() == 0 {
+            println!("iteration {}", num_iter + 1);
+            dynamics_optimizer.grow_nodes(3);
+            let count = dynamics_optimizer
+                .dynamics_tree
+                .nodes()
+                // filter out orphans that have no children (i.e. non-root orphans)
+                .filter(|node| node.parent().is_some() || node.has_children())
+                .count();
+            let num_to_prune = count as i32 - target_count as i32;
+            if num_to_prune > 0 {
+                dynamics_optimizer.prune_nodes((num_to_prune + 5) as usize);
+            }
+
+            println!("Number of leaves: {}", dynamics_optimizer.leaves().count());
+
+            println!(
+                "Total number: {}",
+                dynamics_optimizer.dynamics_tree.nodes().count() - dynamics_optimizer.orphans.len()
+            );
+            num_iter += 1;
+            println!("");
+        }
+        dynamics_optimizer.calculate_solutions(&mpc_problem);
+
+        // ensure that we found at least one solution
+        assert!(dynamics_optimizer.solutions.len() > 0);
+
+        let solution_trajectory =
+            mpc_problem.calculate_trajectory(&dynamics_optimizer.solutions[0].0);
+
+        let last_point = solution_trajectory.last().unwrap();
+
+        println!("last_point: {}", last_point);
+
+        assert!(last_point.relative_eq(&goal, 0.1, 0.1));
     }
 }
