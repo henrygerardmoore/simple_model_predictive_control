@@ -20,7 +20,7 @@ log = "0.4.28"
 ndarray = {version = "0.16", features = ["rayon", "serde"]}
 ndarray-linalg = { version = "0.17", features = ["intel-mkl-static"] }
 ndarray-rand = "0.15.0"
-plotters = "0.3.7"
+plotters = {version = "0.3.7", default-features = false, features = ["bitmap_backend", "bitmap_encoder", "bitmap_gif", "all_series", "all_elements", "full_palette", "colormaps", "ttf", "fontconfig-dlopen", "deprecated_items"]}
 
 # cargo run --profile heavy_optimization --example acrobot
 [profile.heavy_optimization]

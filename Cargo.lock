@@ -1392,15 +1392,12 @@ version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5aeb6f403d7a4911efb1e33402027fc44f29b5bf6def3effcc22d7bb75f2b747"
 dependencies = [
- "chrono",
  "font-kit",
- "image",
  "lazy_static",
  "num-traits",
  "pathfinder_geometry",
  "plotters-backend",
  "plotters-bitmap",
- "plotters-svg",
  "ttf-parser",
  "wasm-bindgen",
  "web-sys",
@@ -1420,15 +1417,6 @@ checksum = "72ce181e3f6bf82d6c1dc569103ca7b1bd964c60ba03d7e6cdfbb3e3eb7f7405"
 dependencies = [
  "gif",
  "image",
- "plotters-backend",
-]
-
-[[package]]
-name = "plotters-svg"
-version = "0.3.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51bae2ac328883f7acdfea3d66a7c35751187f870bc81f94563733a154d7a670"
-dependencies = [
  "plotters-backend",
 ]
 
